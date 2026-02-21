@@ -47,6 +47,8 @@ export const api = {
     getById: (id: number) => trpcQuery("merchant.getById", { id }),
     categories: () => trpcQuery("merchant.categories"),
     upsert: (data: Record<string, unknown>, token: string) => trpcMutation("merchant.upsert", data, token),
+    registerPublic: (data: { businessName: string; category: string; description: string; serviceScope: string; area: string; phone: string; contactName?: string }) =>
+      trpcMutation("merchant.registerPublic", data),
     myMerchant: (token: string) => trpcQuery("merchant.myMerchant"),
     searchOnline: (data: { query: string; location?: string }, token: string) =>
       trpcMutation("merchant.searchOnline", data, token),

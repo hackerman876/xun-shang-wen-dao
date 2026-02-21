@@ -284,3 +284,24 @@ export async function updateMatchSession(sessionId: string, data: {
   if (!db) return;
   await db.update(matchSessions).set({ ...data, updatedAt: new Date() }).where(eq(matchSessions.sessionId, sessionId));
 }
+
+/**
+ * 根据手机号获取或创建匿名用户（用于商家公开入驻）
+ */
+export async function getOrCreateAnonymousUser(phone: string): Promise<number> {
+  const existing = await getUserByPhone(phone);
+  if (existing) return existing.id;
+  // 创建匿名用户（openId用手机号生成唯一标识）
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.insert(users).values({
+    openId: "phone_" + phone,
+    phone,
+    name: "商家用户",
+    role: "user",
+  });
+  // 重新查询获取id
+  const created = await getUserByPhone(phone);
+  if (!created) throw new Error("Failed to create user");
+  return created.id;
+}

@@ -7,7 +7,7 @@ import { invokeLLM } from "./_core/llm";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import * as db from "./db";
-import { qwenChat, qwenDailyInsight, qwenAppointmentSummary, qwenSimulateCall, qwenSearchMerchant, qwenIndustryAnalysis, qwenMatchCustomers, qwenMatchMerchants, qwenDeepNeedChat, qwenPreciseMatch, qwenBuildProfile } from "./qwen";
+import { qwenChat, qwenDailyInsight, qwenAppointmentSummary, qwenSimulateCall, qwenSearchMerchant, qwenIndustryAnalysis, qwenMatchCustomers, qwenMatchMerchants, qwenDeepNeedChat, qwenPreciseMatch, qwenBuildProfile, qwenAnalyzeMerchant } from "./qwen";
 import { randomUUID } from "crypto";
 
 const JWT_SECRET = new TextEncoder().encode(
@@ -136,6 +136,57 @@ export const appRouter = router({
       }),
 
     categories: publicProcedure.query(() => CATEGORIES),
+    // 公开入驻接口（无需登录），AI自动分析并录入匹配库
+    registerPublic: publicProcedure
+      .input(z.object({
+        businessName: z.string().min(2).max(100),
+        category: z.enum(CATEGORIES as [string, ...string[]]),
+        description: z.string().min(10).max(500),
+        serviceScope: z.string().min(5).max(200),
+        area: z.string().min(2).max(100),
+        phone: z.string().min(11).max(20),
+        contactName: z.string().max(50).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        // AI分析商家信息
+        const aiAnalysis = await qwenAnalyzeMerchant({
+          businessName: input.businessName,
+          category: input.category,
+          description: input.description,
+          serviceScope: input.serviceScope,
+          area: input.area,
+        });
+        // 录入数据库（创建一个匿名用户ID用于关联）
+        const userId = await db.getOrCreateAnonymousUser(input.phone);
+        const existing = await db.getMerchantByUserId(userId);
+        let merchantId: number;
+        if (existing) {
+          await db.updateMerchant(existing.id, {
+            businessName: input.businessName,
+            category: input.category,
+            description: aiAnalysis.aiSummary || input.description,
+            address: input.area,
+            phone: input.phone,
+            tags: aiAnalysis.tags.join(","),
+          });
+          merchantId = existing.id;
+        } else {
+          merchantId = await db.createMerchant({
+            userId,
+            businessName: input.businessName,
+            category: input.category,
+            description: aiAnalysis.aiSummary || input.description,
+            address: input.area,
+            phone: input.phone,
+            tags: aiAnalysis.tags.join(","),
+          });
+        }
+        return {
+          id: merchantId,
+          aiAnalysis,
+          message: `${input.businessName} 已成功入驻！AI已为你生成专属名片，道道将为你精准匹配有缘客户。`,
+        };
+      }),
 
     // 联网实时搜索商家
     searchOnline: protectedProcedure

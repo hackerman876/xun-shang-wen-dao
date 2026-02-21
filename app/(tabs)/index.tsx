@@ -4,6 +4,7 @@ import {
   ActivityIndicator,
   Image,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -44,6 +45,9 @@ type MatchResult = {
     score: number;
     contactTip: string;
     area?: string;
+    phone?: string;
+    category?: string;
+    highlights?: string;
   }>;
   tips: string;
 };
@@ -254,13 +258,25 @@ export default function HomeScreen() {
                   {msg.matchResult.matches.map((m, i) => (
                     <View key={i} style={s.matchCard}>
                       <View style={s.matchCardTop}>
-                        <Text style={s.matchName}>{m.name}</Text>
+                        <View style={{ flex: 1 }}>
+                          <Text style={s.matchName}>{m.name}</Text>
+                          {m.category && <Text style={s.matchCategory}>{m.category}</Text>}
+                        </View>
                         <View style={s.scoreBadge}><Text style={s.scoreText}>{m.score}分</Text></View>
                       </View>
                       {m.area && <Text style={s.matchArea}>📍 {m.area}</Text>}
                       <Text style={s.matchDesc}>{m.description}</Text>
+                      {m.highlights && <Text style={s.matchHighlight}>✨ {m.highlights}</Text>}
                       <Text style={s.matchReason}>✓ {m.reason}</Text>
                       <Text style={s.matchTip}>💡 {m.contactTip}</Text>
+                      {m.phone && (
+                        <Pressable
+                          style={s.matchCallBtn}
+                          onPress={() => Linking.openURL("tel:" + m.phone)}
+                        >
+                          <Text style={s.matchCallBtnText}>📞 立即联系 {m.phone}</Text>
+                        </Pressable>
+                      )}
                     </View>
                   ))}
                   {msg.matchResult.tips && (
@@ -407,6 +423,13 @@ const s = StyleSheet.create({
   matchDesc: { fontSize: 13, color: C.text, lineHeight: 19 },
   matchReason: { fontSize: 12, color: C.primary, lineHeight: 18 },
   matchTip: { fontSize: 12, color: C.muted, lineHeight: 18 },
+  matchCategory: { fontSize: 11, color: "#10A37F", fontWeight: "600", marginTop: 1 },
+  matchHighlight: { fontSize: 12, color: "#0D0D0D", lineHeight: 17 },
+  matchCallBtn: {
+    marginTop: 8, paddingVertical: 10, borderRadius: 10,
+    backgroundColor: "#10A37F", alignItems: "center",
+  },
+  matchCallBtnText: { fontSize: 13, color: "#fff", fontWeight: "700" },
   tipsBox: { backgroundColor: C.primaryLight, borderRadius: 10, padding: 12 },
   tipsText: { fontSize: 13, color: C.primary, lineHeight: 20 },
   rematchBtn: {

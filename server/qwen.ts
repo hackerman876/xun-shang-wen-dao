@@ -810,3 +810,52 @@ ${matchTags?.length ? `本次匹配标签：${matchTags.join("、")}` : ""}
   } catch { /* ignore */ }
   return result.reply;
 }
+
+/**
+ * AI分析商家信息，提取标签、目标客群、服务亮点
+ */
+export async function qwenAnalyzeMerchant(params: {
+  businessName: string;
+  category: string;
+  description: string;
+  serviceScope: string;
+  area: string;
+}): Promise<{
+  tags: string[];
+  targetCustomers: string;
+  highlights: string;
+  aiSummary: string;
+}> {
+  const prompt = `你是一个商业分析专家。请分析以下商家信息，提取关键信息用于AI智能匹配。
+
+商家名称：${params.businessName}
+业务类型：${params.category}
+服务描述：${params.description}
+服务范围：${params.serviceScope}
+所在地区：${params.area}
+
+请以JSON格式返回（不要加markdown代码块）：
+{
+  "tags": ["标签1", "标签2", "标签3", "标签4", "标签5"],
+  "targetCustomers": "目标客群描述（50字以内）",
+  "highlights": "服务亮点（50字以内）",
+  "aiSummary": "AI生成的商家简介，用于匹配推荐（80字以内，吸引人）"
+}`;
+
+  try {
+    const result = await invokeQwen(
+      [{ role: "user", content: prompt }],
+      2048,
+      false
+    );
+    const text = result.reply.trim().replace(/```json\n?/g, "").replace(/```\n?/g, "");
+    return JSON.parse(text);
+  } catch {
+    return {
+      tags: [params.category, params.area, "专业服务"],
+      targetCustomers: "有相关需求的用户",
+      highlights: params.description?.slice(0, 50) || "专业可靠",
+      aiSummary: `${params.businessName}，专注${params.category}服务，${params.serviceScope || "服务周到"}`,
+    };
+  }
+}

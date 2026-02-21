@@ -105,3 +105,13 @@
 - [x] 修复api.ts响应解析（result.data.json）
 - [x] TypeScript 0错误验证通过
 - [x] 所有核心接口验证通过（health/match.chat/appointment.listByPhone/match.getProfile）
+
+## 商家入驻 + AI牵线搭桥（新增）
+- [ ] 后端：merchant.register公开接口（无需登录，AI分析并录入匹配库）
+- [ ] 后端：merchant.list公开接口（展示所有已入驻商家）
+- [ ] 后端：qwenAnalyzeMerchant函数（AI提取商家标签/服务范围/目标客群）
+- [ ] 前端：发现页"我要入驻"按钮
+- [ ] 前端：商家入驻表单（业务类型/服务范围/联系方式/所在地区）
+- [ ] 前端：入驻成功后AI生成商家名片展示
+- [ ] 前端：道道AI对话中主动推送匹配商家/用户"有缘人"卡片
+- [ ] 前端：有缘人卡片支持一键拨打/复制联系方式
