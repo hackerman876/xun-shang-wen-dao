@@ -66,6 +66,12 @@ export const api = {
     industryAnalysis: (data: { industry: string }, token: string) =>
       trpcMutation("ai.industryAnalysis", data, token),
   },
+  match: {
+    findCustomers: (data: { businessType: string; description?: string; targetArea?: string; requirements?: string }, token: string) =>
+      trpcMutation("match.findCustomers", data, token),
+    findMerchants: (data: { need: string; budget?: string; area?: string; urgency?: string }, token: string) =>
+      trpcMutation("match.findMerchants", data, token),
+  },
   insight: {
     today: (token: string) => trpcQuery("insight.today"),
   },

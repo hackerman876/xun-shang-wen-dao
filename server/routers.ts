@@ -7,7 +7,7 @@ import { invokeLLM } from "./_core/llm";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import * as db from "./db";
-import { qwenChat, qwenDailyInsight, qwenAppointmentSummary, qwenSimulateCall, qwenSearchMerchant, qwenIndustryAnalysis } from "./qwen";
+import { qwenChat, qwenDailyInsight, qwenAppointmentSummary, qwenSimulateCall, qwenSearchMerchant, qwenIndustryAnalysis, qwenMatchCustomers, qwenMatchMerchants } from "./qwen";
 
 const JWT_SECRET = new TextEncoder().encode(
   process.env.JWT_SECRET || "xun-shang-wen-dao-secret-2026"
@@ -268,6 +268,45 @@ export const appRouter = router({
       .mutation(async ({ input }) => {
         const analysis = await qwenIndustryAnalysis(input.industry);
         return { success: true, analysis, industry: input.industry, analyzedAt: new Date().toISOString() };
+      }),
+  }),
+
+  // AI全网匹配有缘人
+  match: router({
+    // 商家找客户：AI全网匹配潜在客户群体
+    findCustomers: protectedProcedure
+      .input(z.object({
+        businessType: z.string().min(1),
+        description: z.string().optional(),
+        targetArea: z.string().optional(),
+        requirements: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const result = await qwenMatchCustomers(input);
+        return { success: true, ...result, matchedAt: new Date().toISOString() };
+      }),
+
+    // 用户找商家：AI全网匹配最合适商家
+    findMerchants: protectedProcedure
+      .input(z.object({
+        need: z.string().min(1),
+        budget: z.string().optional(),
+        area: z.string().optional(),
+        urgency: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        // 先搜索本地商家库
+        const localMerchants = await db.searchMerchants(input.need);
+        const result = await qwenMatchMerchants({
+          ...input,
+          localMerchants: localMerchants.map((m) => ({
+            id: m.id,
+            businessName: m.businessName,
+            category: m.category,
+            description: m.description || undefined,
+          })),
+        });
+        return { success: true, ...result, localMerchants, matchedAt: new Date().toISOString() };
       }),
   }),
 

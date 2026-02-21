@@ -401,6 +401,187 @@ export async function qwenSimulateCall(
 }
 
 /**
+ * 专用：商家找客户 - AI全网匹配有缘客户群体
+ */
+export async function qwenMatchCustomers(params: {
+  businessType: string;
+  description?: string;
+  targetArea?: string;
+  requirements?: string;
+}): Promise<{
+  summary: string;
+  matches: Array<{
+    type: string;
+    score: number;
+    reason: string;
+    profile: string;
+    contactSuggestion: string;
+    platform: string;
+  }>;
+  strategy: string;
+  hotTrends: string[];
+}> {
+  const { businessType, description, targetArea, requirements } = params;
+  const today = new Date().toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric" });
+
+  const result = await invokeQwen([
+    {
+      role: "system",
+      content: "你是商业智能匹配引擎，具备全网实时搜索能力，专门帮商家匹配最有缘分的潜在客户。必须先搜索最新市场数据，然后返回合法JSON，不要有任何多余文字或markdown标记。"
+    },
+    {
+      role: "user",
+      content: `今天是${today}。请联网搜索并分析，为以下商家匹配最有缘分的潜在客户群体。
+
+商家信息：
+- 业务类型：${businessType}
+- 业务描述：${description || "无"}
+- 目标地区：${targetArea || "全国"}
+- 特殊要求：${requirements || "无"}
+
+请联网搜索并返回 JSON 格式：
+{
+  "summary": "匹配总结（100字内）",
+  "matches": [
+    {
+      "type": "客户群体名称",
+      "score": 95,
+      "reason": "匹配理由",
+      "profile": "客户画像描述",
+      "contactSuggestion": "接触建议",
+      "platform": "建议寻找渠道"
+    }
+  ],
+  "strategy": "获客策略建议",
+  "hotTrends": ["当前市场热点趋势1", "点势2"]
+}
+
+请返回5-8个匹配度最高的客户群体，按匹配度降序排列。`
+    },
+  ], 2000, true);
+
+  try {
+    const match = result.reply.match(/\{[\s\S]*\}/);
+    if (match) {
+      const parsed = JSON.parse(match[0]);
+      return {
+        summary: parsed.summary || "匹配分析完成",
+        matches: parsed.matches || [],
+        strategy: parsed.strategy || "",
+        hotTrends: parsed.hotTrends || [],
+      };
+    }
+  } catch { /* ignore */ }
+
+  return {
+    summary: result.reply.slice(0, 100),
+    matches: [],
+    strategy: "",
+    hotTrends: [],
+  };
+}
+
+/**
+ * 专用：用户找商家 - AI全网匹配最合适商家
+ */
+export async function qwenMatchMerchants(params: {
+  need: string;
+  budget?: string;
+  area?: string;
+  urgency?: string;
+  localMerchants?: Array<{ id: number; businessName: string; category: string; description?: string }>;
+}): Promise<{
+  summary: string;
+  matches: Array<{
+    name: string;
+    category: string;
+    score: number;
+    reason: string;
+    priceRange: string;
+    highlights: string[];
+    contactTip: string;
+    isLocal: boolean;
+    localId: number | null;
+  }>;
+  tips: string;
+  alternatives: string[];
+}> {
+  const { need, budget, area, urgency, localMerchants } = params;
+  const today = new Date().toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric" });
+
+  const result = await invokeQwen([
+    {
+      role: "system",
+      content: "你是商业智能匹配引擎，具备全网实时搜索能力，专门帮用户匹配最合适的商家。必须先搜索最新信息，然后返回合法JSON，不要有任何多余文字或markdown标记。"
+    },
+    {
+      role: "user",
+      content: `今天是${today}。请联网搜索并分析，为以下用户匹配最有缘分的商家。
+
+用户需求：
+- 需求描述：${need}
+- 预算范围：${budget || "不限"}
+- 地区偏好：${area || "不限"}
+- 紧迫程度：${urgency || "一般"}
+
+平台已有商家：${localMerchants && localMerchants.length > 0 ? JSON.stringify(localMerchants) : "暂无"}
+
+请联网搜索并返回 JSON 格式：
+{
+  "summary": "匹配总结（100字内）",
+  "matches": [
+    {
+      "name": "商家名称",
+      "category": "类型",
+      "score": 95,
+      "reason": "匹配理由",
+      "priceRange": "价格区间",
+      "highlights": ["亮点1", "亮点2"],
+      "contactTip": "联系建议",
+      "isLocal": false,
+      "localId": null
+    }
+  ],
+  "tips": "消费建议",
+  "alternatives": ["备选方案1", "备选方案2"]
+}
+
+请返回5-8个匹配度最高的商家，优先匹配平台内商家，再补充全网匹配结果，按匹配度降序排列。`
+    },
+  ], 2000, true);
+
+  try {
+    const match = result.reply.match(/\{[\s\S]*\}/);
+    if (match) {
+      const parsed = JSON.parse(match[0]);
+      // 标记本地商家
+      if (parsed.matches && localMerchants) {
+        parsed.matches = parsed.matches.map((m: { name: string; isLocal: boolean; localId: number | null }) => {
+          const local = localMerchants.find(lm =>
+            lm.businessName === m.name || m.name?.includes(lm.businessName)
+          );
+          if (local) { m.isLocal = true; m.localId = local.id; }
+          return m;
+        });
+      }
+      return {
+        summary: parsed.summary || "匹配分析完成",
+        matches: parsed.matches || [],
+        tips: parsed.tips || "",
+        alternatives: parsed.alternatives || [],
+      };
+    }
+  } catch { /* ignore */ }
+
+  return {
+    summary: result.reply.slice(0, 100),
+    matches: [],
+    tips: "",
+    alternatives: [],
+  };
+}
+
+/**
  * 专用：实时行业分析
  */
 export async function qwenIndustryAnalysis(industry: string): Promise<string> {
