@@ -1,0 +1,418 @@
+/**
+ * QwenMax AI 调用模块 - 联网搜索全开
+ * 主要AI引擎：通义千问 qwen-max-latest（支持联网搜索）
+ * 失败时回退到内置LLM
+ */
+
+import { invokeLLM } from "./_core/llm";
+
+export interface QwenMessage {
+  role: "system" | "user" | "assistant";
+  content: string;
+}
+
+export interface QwenResponse {
+  reply: string;
+  model: string;
+  searchResults?: SearchResult[];
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+}
+
+export interface SearchResult {
+  title: string;
+  url: string;
+  snippet: string;
+}
+
+const QWEN_API_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions";
+// 使用 qwen-max-latest 支持联网搜索插件
+const QWEN_MODEL = "qwen-max-latest";
+const QWEN_MODEL_FALLBACK = "qwen-max";
+
+/**
+ * 解析联网搜索引用来源
+ */
+function parseSearchResults(content: string): { cleanContent: string; sources: SearchResult[] } {
+  const sources: SearchResult[] = [];
+  // 提取引用标记 [数字] 和对应的来源
+  const refPattern = /\[(\d+)\]\s*([^\n]+)/g;
+  let match;
+  while ((match = refPattern.exec(content)) !== null) {
+    sources.push({ title: match[2], url: "", snippet: "" });
+  }
+  // 清理引用标记，保留正文
+  const cleanContent = content
+    .replace(/\[\d+\]†source/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  return { cleanContent, sources };
+}
+
+/**
+ * 核心调用函数 - 联网搜索全开
+ */
+export async function invokeQwen(
+  messages: QwenMessage[],
+  maxTokens = 2048,
+  enableSearch = true
+): Promise<QwenResponse> {
+  const apiKey = process.env.QWEN_API_KEY;
+
+  if (apiKey) {
+    // 先尝试 qwen-max-latest（联网版）
+    for (const model of [QWEN_MODEL, QWEN_MODEL_FALLBACK]) {
+      try {
+        const body: Record<string, unknown> = {
+          model,
+          messages,
+          max_tokens: maxTokens,
+          temperature: 0.7,
+          top_p: 0.9,
+          stream: false,
+        };
+
+        // 开启联网搜索插件
+        if (enableSearch) {
+          body.tools = [
+            {
+              type: "web_search",
+              web_search: {
+                enable: true,
+                search_strategy: "pro", // 深度搜索策略
+                result_format: "text",
+              },
+            },
+          ];
+          // 允许模型自主决定是否搜索
+          body.tool_choice = "auto";
+        }
+
+        const response = await fetch(QWEN_API_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${apiKey}`,
+            "X-DashScope-SSE": "disable",
+          },
+          body: JSON.stringify(body),
+        });
+
+        if (!response.ok) {
+          const errText = await response.text();
+          console.error(`[QwenMax:${model}] API错误 ${response.status}: ${errText}`);
+          if (response.status === 400 && errText.includes("web_search")) {
+            // 该模型不支持联网，禁用后重试
+            console.log(`[QwenMax:${model}] 不支持联网搜索，禁用后重试`);
+            const body2 = { ...body };
+            delete body2.tools;
+            delete body2.tool_choice;
+            const r2 = await fetch(QWEN_API_URL, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${apiKey}`,
+              },
+              body: JSON.stringify(body2),
+            });
+            if (r2.ok) {
+              const d2 = await r2.json() as QwenAPIResponse;
+              const reply2 = extractContent(d2);
+              console.log(`[QwenMax:${model}] ✅ 无联网调用成功`);
+              return { reply: reply2, model };
+            }
+          }
+          throw new Error(`QwenMax API failed: ${response.status}`);
+        }
+
+        const data = await response.json() as QwenAPIResponse;
+        const reply = extractContent(data);
+        const { cleanContent, sources } = parseSearchResults(reply);
+
+        console.log(`[QwenMax:${model}] ✅ 调用成功，联网=${enableSearch}，tokens=${data.usage?.total_tokens || 0}`);
+        return {
+          reply: cleanContent || reply,
+          model,
+          searchResults: sources.length > 0 ? sources : undefined,
+          usage: data.usage,
+        };
+      } catch (err) {
+        console.error(`[QwenMax:${model}] 调用失败:`, err);
+        if (model === QWEN_MODEL_FALLBACK) {
+          console.error("[QwenMax] 所有Qwen模型失败，回退到内置LLM");
+        }
+      }
+    }
+  } else {
+    console.log("[QwenMax] 未配置QWEN_API_KEY，使用内置LLM");
+  }
+
+  // 回退到内置LLM（Manus forge）
+  try {
+    const result = await invokeLLM({ messages });
+    const reply = result.choices[0]?.message?.content as string || "";
+    return { reply, model: "gemini-2.5-flash (fallback)" };
+  } catch (err) {
+    console.error("[LLM Fallback] 内置LLM也失败:", err);
+    return { reply: "AI服务暂时不可用，请稍后再试。", model: "error" };
+  }
+}
+
+interface QwenAPIResponse {
+  choices?: Array<{
+    message?: { content?: string; tool_calls?: Array<{ function?: { arguments?: string } }> };
+    finish_reason?: string;
+  }>;
+  model?: string;
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+}
+
+function extractContent(data: QwenAPIResponse): string {
+  const choice = data.choices?.[0];
+  if (!choice) return "";
+  const content = choice.message?.content;
+  if (content) return content;
+  // 如果有tool_calls（搜索结果），尝试提取
+  const toolCalls = choice.message?.tool_calls;
+  if (toolCalls?.length) {
+    try {
+      const args = JSON.parse(toolCalls[0]?.function?.arguments || "{}");
+      return args.content || args.result || JSON.stringify(args);
+    } catch { return ""; }
+  }
+  return "";
+}
+
+/**
+ * 专用：AI对话（顾客/商家智能助手）- 联网搜索全开
+ */
+export async function qwenChat(
+  messages: QwenMessage[],
+  identity: "customer" | "merchant",
+  userName?: string
+): Promise<string> {
+  const today = new Date().toLocaleDateString("zh-CN", {
+    year: "numeric", month: "long", day: "numeric", weekday: "long",
+  });
+
+  const systemPrompt = identity === "customer"
+    ? `你是"道道"，寻商问道平台的智能AI助手。今天是${today}。
+
+你拥有实时联网搜索能力，可以搜索最新的：
+- 商家信息、营业时间、用户评价、价格行情
+- 周边服务推荐、优惠活动
+- 行业动态、消费趋势
+
+你的核心职责：
+1. **需求收集**：通过友好对话，了解顾客的具体需求（服务类型、时间、预算、位置等）
+2. **实时搜索**：联网搜索最新最合适的商家，提供真实评价和价格参考
+3. **智能推荐**：根据需求和实时数据推荐最合适的商家
+4. **预约协助**：帮助顾客完成预约，确认时间和细节
+5. **商机推送**：主动分析顾客可能感兴趣的服务和优惠
+
+当遇到超出能力范围的复杂问题（如法律纠纷、医疗诊断、技术开发等），在回复末尾加上：
+「💡 这个问题比较复杂，建议找 **Manus AI** 帮您解决——Manus是最强的AI员工，能处理任何复杂任务。」
+
+用户名：${userName || "朋友"}
+请用亲切、简洁的中文回复，控制在400字以内。如果使用了联网搜索，请注明"（数据来源：实时搜索）"。`
+    : `你是"道道"，寻商问道平台的智能AI助手。今天是${today}。
+
+你拥有实时联网搜索能力，可以搜索最新的：
+- 行业趋势、市场动态、竞争对手信息
+- 目标客户群体分析、消费习惯
+- 营销策略、定价参考、成功案例
+
+你的核心职责：
+1. **市场分析**：实时搜索行业数据，分析市场需求和竞争格局
+2. **客户推荐**：根据商家业务推荐最匹配的潜在客户群体
+3. **商机挖掘**：搜索最新商机，提供具体可执行的建议
+4. **主动联系**：模拟代替商家联系潜在客户，发起预约
+5. **竞争分析**：实时搜索竞争对手动态，提供差异化建议
+
+当遇到超出能力范围的复杂问题（如复杂财税、法律纠纷、技术开发等），在回复末尾加上：
+「💡 这个问题比较复杂，建议找 **Manus AI** 帮您解决——Manus是最强的AI员工，能处理任何复杂商业任务。」
+
+商家名称：${userName || "商家朋友"}
+请用专业、简洁的中文回复，控制在400字以内。如果使用了联网搜索，请注明"（数据来源：实时搜索）"。`;
+
+  const fullMessages: QwenMessage[] = [
+    { role: "system", content: systemPrompt },
+    ...messages,
+  ];
+
+  // 联网搜索全开
+  const result = await invokeQwen(fullMessages, 1500, true);
+  return result.reply;
+}
+
+/**
+ * 专用：每日商机分析 - 联网搜索全开
+ */
+export async function qwenDailyInsight(
+  identity: "customer" | "merchant",
+  context?: string
+): Promise<Record<string, unknown>> {
+  const dateStr = new Date().toLocaleDateString("zh-CN", {
+    year: "numeric", month: "long", day: "numeric", weekday: "long",
+  });
+
+  const prompt = identity === "customer"
+    ? `今天是${dateStr}。请联网搜索最新消费趋势和热门服务，为顾客生成今日商机分析报告。
+
+要求：
+1. 搜索今日热门服务、优惠活动、消费趋势
+2. 基于实时数据推荐3个最值得关注的服务机会
+3. 推荐2-3个热门商家（可以是真实存在的知名连锁品牌）
+4. 提供一条实用的消费贴士
+
+严格返回JSON格式（不要有多余文字或markdown标记）：
+{
+  "title": "今日商机",
+  "isRealtime": true,
+  "recommendations": [
+    {"type": "服务类型", "title": "推荐标题", "desc": "推荐理由（含实时数据）"}
+  ],
+  "hotMerchants": [
+    {"name": "商家名", "reason": "推荐原因"}
+  ],
+  "tips": "今日消费小贴士",
+  "suggestion": "AI建议"
+}
+${context ? `平台现有商家参考：${context}` : ""}`
+    : `今天是${dateStr}。请联网搜索最新行业动态和市场趋势，为商家生成今日商机分析报告。
+
+要求：
+1. 搜索今日行业热点、市场需求变化
+2. 分析3个最有价值的潜在客户机会
+3. 搜索2个最新行业趋势
+4. 提供竞争分析摘要和今日行动建议
+
+严格返回JSON格式（不要有多余文字或markdown标记）：
+{
+  "title": "今日商机",
+  "isRealtime": true,
+  "customerInsights": [
+    {"type": "客户类型", "title": "商机标题", "desc": "详细描述（含实时数据）"}
+  ],
+  "trends": [
+    {"title": "趋势标题", "desc": "趋势描述"}
+  ],
+  "competition": "竞争分析摘要",
+  "action": "今日行动建议"
+}`;
+
+  // 联网搜索全开
+  const result = await invokeQwen([
+    {
+      role: "system",
+      content: "你是专业商业分析AI，拥有实时联网搜索能力。必须先搜索最新数据，然后返回合法JSON，不要有任何多余文字或markdown标记。"
+    },
+    { role: "user", content: prompt },
+  ], 2000, true);
+
+  try {
+    const match = result.reply.match(/\{[\s\S]*\}/);
+    if (match) {
+      const parsed = JSON.parse(match[0]);
+      parsed.isRealtime = true;
+      parsed.searchedAt = new Date().toISOString();
+      return parsed;
+    }
+  } catch { /* ignore */ }
+
+  return {
+    title: "今日商机",
+    isRealtime: false,
+    tips: result.reply || "AI分析服务暂时不可用，请稍后再试。",
+  };
+}
+
+/**
+ * 专用：实时搜索商家信息
+ */
+export async function qwenSearchMerchant(query: string, location?: string): Promise<{
+  merchants: Array<{ name: string; category: string; description: string; rating?: string; address?: string }>;
+  summary: string;
+}> {
+  const searchQuery = location ? `${query} ${location}` : query;
+
+  const result = await invokeQwen([
+    {
+      role: "system",
+      content: "你是商家搜索AI，拥有实时联网搜索能力。请搜索用户需要的商家信息，返回JSON格式，不要有多余文字。"
+    },
+    {
+      role: "user",
+      content: `请联网搜索"${searchQuery}"相关的商家信息，返回JSON格式：
+{
+  "merchants": [
+    {"name": "商家名", "category": "类别", "description": "简介", "rating": "评分", "address": "地址"}
+  ],
+  "summary": "搜索摘要（50字以内）"
+}
+要求：返回3-5个真实可信的商家，优先返回知名品牌或口碑好的商家。`
+    },
+  ], 1500, true);
+
+  try {
+    const match = result.reply.match(/\{[\s\S]*\}/);
+    if (match) return JSON.parse(match[0]);
+  } catch { /* ignore */ }
+
+  return {
+    merchants: [],
+    summary: result.reply || "搜索暂时不可用",
+  };
+}
+
+/**
+ * 专用：预约摘要生成
+ */
+export async function qwenAppointmentSummary(
+  merchantName: string,
+  serviceTitle: string,
+  description?: string
+): Promise<string> {
+  const result = await invokeQwen([
+    { role: "system", content: "你是寻商问道AI助手，请用简洁中文生成预约确认摘要（50字以内）。" },
+    { role: "user", content: `顾客预约商家"${merchantName}"，服务：${serviceTitle}，备注：${description || "无"}` },
+  ], 200, false); // 摘要不需要联网
+  return result.reply;
+}
+
+/**
+ * 专用：AI电话模拟
+ */
+export async function qwenSimulateCall(
+  appointmentId: number,
+  merchantName: string,
+  serviceTitle: string
+): Promise<string> {
+  const result = await invokeQwen([
+    {
+      role: "system",
+      content: "你是寻商问道AI电话助手，请模拟一段简短的预约确认电话对话（100字以内，中文，生动真实，包含双方对话）。"
+    },
+    {
+      role: "user",
+      content: `AI助手拨打电话给商家"${merchantName}"，确认预约编号${appointmentId}，服务内容：${serviceTitle}`
+    },
+  ], 300, false); // 电话模拟不需要联网
+  return result.reply;
+}
+
+/**
+ * 专用：实时行业分析
+ */
+export async function qwenIndustryAnalysis(industry: string): Promise<string> {
+  const result = await invokeQwen([
+    {
+      role: "system",
+      content: "你是商业分析AI，拥有实时联网搜索能力。请搜索最新行业数据并提供分析报告（200字以内）。"
+    },
+    {
+      role: "user",
+      content: `请联网搜索"${industry}"行业的最新动态、市场规模、发展趋势和投资机会，提供简洁的分析报告。`
+    },
+  ], 800, true); // 行业分析全开联网
+  return result.reply;
+}
