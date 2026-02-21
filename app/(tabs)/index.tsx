@@ -1,405 +1,434 @@
-import { ScreenContainer } from "@/components/screen-container";
-import { IconSymbol } from "@/components/ui/icon-symbol";
-import { useColors } from "@/hooks/use-colors";
 import { api } from "@/lib/api";
-import { useAuth } from "@/lib/auth-context";
-import { router } from "expo-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  FlatList,
-  RefreshControl,
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
+  TextInput,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 
-const CATEGORIES = [
-  { id: "all", label: "全部", icon: "🌟" },
-  { id: "餐饮", label: "餐饮", icon: "🍜" },
-  { id: "美容", label: "美容", icon: "💄" },
-  { id: "教育", label: "教育", icon: "📚" },
-  { id: "医疗", label: "医疗", icon: "🏥" },
-  { id: "家政", label: "家政", icon: "🏠" },
-  { id: "维修", label: "维修", icon: "🔧" },
-  { id: "法律", label: "法律", icon: "⚖️" },
+const C = {
+  bg: "#FFFFFF",
+  surface: "#F7F7F8",
+  border: "#E5E5E5",
+  primary: "#10A37F",
+  primaryLight: "#E8F5F0",
+  text: "#0D0D0D",
+  muted: "#6E6E80",
+  aiMsg: "#F7F7F8",
+  userMsg: "#10A37F",
+  matchCard: "#FAFAFA",
+  matchBorder: "#E0E0E0",
+};
+
+type Message = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  matchResult?: MatchResult;
+};
+
+type MatchResult = {
+  summary: string;
+  matches: Array<{
+    name: string;
+    description: string;
+    reason: string;
+    score: number;
+    contactTip: string;
+    area?: string;
+  }>;
+  tips: string;
+};
+
+const QUICK_STARTS_CUSTOMER = [
+  "我想找一家附近的美发店",
+  "需要家政保洁服务",
+  "找装修设计公司",
+  "寻找教育培训机构",
+];
+const QUICK_STARTS_MERCHANT = [
+  "我是餐厅老板，想找更多回头客",
+  "我开美容院，想拓展新客源",
+  "我做家政服务，想找更多客户",
+  "我是培训机构，想找学员",
 ];
 
-interface Merchant {
-  id: number;
-  businessName: string;
-  category: string;
-  description: string;
-  rating: number;
-  reviewCount: number;
-  address: string;
-}
-
-interface InsightData {
-  title?: string;
-  recommendations?: Array<{ type: string; title: string; desc: string }>;
-  hotMerchants?: Array<{ name: string; reason: string }>;
-  tips?: string;
-  suggestion?: string;
-  customerInsights?: Array<{ type: string; title: string; desc: string }>;
-  trends?: Array<{ title: string; desc: string }>;
-  competition?: string;
-  action?: string;
-}
-
 export default function HomeScreen() {
-  const colors = useColors();
-  const { user } = useAuth();
-  const [selectedCat, setSelectedCat] = useState("all");
-  const [merchants, setMerchants] = useState<Merchant[]>([]);
-  const [insight, setInsight] = useState<InsightData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const [phase, setPhase] = useState<"setup" | "chat">("setup");
+  const [identity, setIdentity] = useState<"customer" | "merchant" | null>(null);
+  const [phone, setPhone] = useState("");
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [inputText, setInputText] = useState("");
+  const [sessionId, setSessionId] = useState<string | undefined>();
+  const [loading, setLoading] = useState(false);
+  const scrollRef = useRef<ScrollView>(null);
 
-  const isCustomer = user?.identity === "customer";
+  const quickStarts = identity === "merchant" ? QUICK_STARTS_MERCHANT : QUICK_STARTS_CUSTOMER;
 
-  const loadData = async () => {
+  useEffect(() => {
+    if (messages.length > 0) {
+      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
+    }
+  }, [messages]);
+
+  const startChat = (firstMessage?: string) => {
+    if (!identity || !/^1[3-9]\d{9}$/.test(phone)) return;
+    setPhase("chat");
+    if (firstMessage) sendMessage(firstMessage);
+  };
+
+  const sendMessage = async (text: string) => {
+    if (!text.trim() || loading) return;
+    const userMsg: Message = { id: Date.now().toString(), role: "user", content: text.trim() };
+    setMessages((prev) => [...prev, userMsg]);
+    setInputText("");
+    setLoading(true);
     try {
-      const [mRes, iRes] = await Promise.allSettled([
-        api.merchant.search("", selectedCat === "all" ? undefined : selectedCat),
-        api.insight.today(user?.id?.toString() || ""),
-      ]);
-      if (mRes.status === "fulfilled") {
-        const data = mRes.value;
-        setMerchants((data as { merchants?: Merchant[] })?.merchants || (Array.isArray(data) ? data : []) as Merchant[]);
-      }
-      if (iRes.status === "fulfilled") {
-        setInsight((iRes.value as { data?: InsightData })?.data || null);
-      }
-    } catch { /* ignore */ } finally {
+      const res = await api.match.chat({
+        sessionId,
+        phone,
+        identity: identity!,
+        message: text.trim(),
+      }) as { sessionId: string; reply: string; shouldMatch: boolean; matchResult: MatchResult | null };
+
+      if (res.sessionId && !sessionId) setSessionId(res.sessionId);
+      const aiMsg: Message = {
+        id: (Date.now() + 1).toString(),
+        role: "assistant",
+        content: res.reply,
+        matchResult: res.shouldMatch && res.matchResult ? res.matchResult : undefined,
+      };
+      setMessages((prev) => [...prev, aiMsg]);
+    } catch {
+      setMessages((prev) => [...prev, {
+        id: (Date.now() + 1).toString(),
+        role: "assistant",
+        content: "抱歉，AI 暂时繁忙，请稍后再试。",
+      }]);
+    } finally {
       setLoading(false);
-      setRefreshing(false);
     }
   };
 
-  useEffect(() => { loadData(); }, [selectedCat]);
-
-  const s = StyleSheet.create({
-    header: {
-      paddingHorizontal: 20, paddingTop: 16, paddingBottom: 14,
-      backgroundColor: colors.surface,
-      borderBottomWidth: 0.5, borderBottomColor: colors.border,
-      flexDirection: "row", justifyContent: "space-between", alignItems: "center",
-    },
-    logoRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-    logoCircle: {
-      width: 36, height: 36, borderRadius: 10,
-      backgroundColor: colors.primary,
-      alignItems: "center", justifyContent: "center",
-    },
-    logoText: { fontSize: 16, color: "#fff", fontWeight: "800" },
-    appName: { fontSize: 18, fontWeight: "800", color: colors.foreground, letterSpacing: 1 },
-    greeting: { fontSize: 13, color: colors.muted },
-    notifBtn: {
-      width: 36, height: 36, borderRadius: 18,
-      backgroundColor: colors.background,
-      alignItems: "center", justifyContent: "center",
-      borderWidth: 1, borderColor: colors.border,
-    },
-    // AI入口卡片
-    aiCard: {
-      margin: 16, borderRadius: 20, padding: 20,
-      backgroundColor: colors.primary,
-      shadowColor: colors.primary,
-      shadowOffset: { width: 0, height: 8 },
-      shadowOpacity: 0.35, shadowRadius: 16, elevation: 10,
-    },
-    aiCardTop: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 10 },
-    aiCardIcon: {
-      width: 40, height: 40, borderRadius: 12,
-      backgroundColor: "rgba(255,255,255,0.2)",
-      alignItems: "center", justifyContent: "center",
-    },
-    aiCardTitle: { fontSize: 17, fontWeight: "800", color: "#fff" },
-    aiCardSub: { fontSize: 13, color: "rgba(255,255,255,0.85)", lineHeight: 19 },
-    aiCardBtn: {
-      marginTop: 14, backgroundColor: "rgba(255,255,255,0.22)",
-      borderRadius: 12, paddingVertical: 10, paddingHorizontal: 16,
-      flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start",
-    },
-    aiCardBtnText: { color: "#fff", fontSize: 14, fontWeight: "700" },
-    // 商机卡片
-    insightCard: {
-      marginHorizontal: 16, marginBottom: 16, borderRadius: 18,
-      backgroundColor: colors.surface, padding: 18,
-      borderWidth: 1, borderColor: colors.border,
-    },
-    insightHeader: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 14 },
-    insightTitle: { fontSize: 15, fontWeight: "700", color: colors.foreground, flex: 1 },
-    insightBadge: {
-      paddingHorizontal: 8, paddingVertical: 3,
-      backgroundColor: colors.success + "20",
-      borderRadius: 8,
-    },
-    insightBadgeText: { fontSize: 11, color: colors.success, fontWeight: "600" },
-    insightItem: {
-      flexDirection: "row", alignItems: "flex-start",
-      gap: 10, marginBottom: 10, paddingBottom: 10,
-      borderBottomWidth: 0.5, borderBottomColor: colors.border,
-    },
-    insightItemLast: {
-      flexDirection: "row", alignItems: "flex-start", gap: 10,
-    },
-    insightNum: {
-      width: 22, height: 22, borderRadius: 11,
-      backgroundColor: colors.primary + "20",
-      alignItems: "center", justifyContent: "center",
-    },
-    insightNumText: { fontSize: 11, color: colors.primary, fontWeight: "700" },
-    insightItemTitle: { fontSize: 14, fontWeight: "600", color: colors.foreground },
-    insightItemDesc: { fontSize: 12, color: colors.muted, lineHeight: 18, marginTop: 2 },
-    insightTip: {
-      marginTop: 12, padding: 12,
-      backgroundColor: colors.primary + "10",
-      borderRadius: 12, borderLeftWidth: 3, borderLeftColor: colors.primary,
-    },
-    insightTipText: { fontSize: 13, color: colors.foreground, lineHeight: 19 },
-    // 分类
-    sectionHeader: {
-      flexDirection: "row", justifyContent: "space-between", alignItems: "center",
-      paddingHorizontal: 20, marginBottom: 12,
-    },
-    sectionTitle: { fontSize: 17, fontWeight: "700", color: colors.foreground },
-    seeAll: { fontSize: 13, color: colors.primary, fontWeight: "600" },
-    catScroll: { paddingHorizontal: 16, paddingBottom: 4, gap: 8 },
-    catItem: {
-      alignItems: "center", paddingVertical: 8,
-      paddingHorizontal: 14, borderRadius: 20, borderWidth: 1.5,
-    },
-    catIcon: { fontSize: 18, marginBottom: 2 },
-    catLabel: { fontSize: 12, fontWeight: "600" },
-    // 商家卡片
-    merchantCard: {
-      marginHorizontal: 16, marginBottom: 12, borderRadius: 18,
-      backgroundColor: colors.surface, padding: 16,
-      borderWidth: 1, borderColor: colors.border,
-      shadowColor: "#000", shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.05, shadowRadius: 8, elevation: 2,
-    },
-    merchantTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
-    merchantName: { fontSize: 16, fontWeight: "700", color: colors.foreground, flex: 1 },
-    merchantCatBadge: {
-      fontSize: 11, color: colors.primary, fontWeight: "600",
-      backgroundColor: colors.primary + "15", paddingHorizontal: 8,
-      paddingVertical: 3, borderRadius: 8, marginTop: 4, alignSelf: "flex-start",
-    },
-    merchantDesc: { fontSize: 13, color: colors.muted, marginTop: 8, lineHeight: 19 },
-    merchantMeta: { flexDirection: "row", alignItems: "center", marginTop: 10, gap: 12 },
-    ratingRow: { flexDirection: "row", alignItems: "center", gap: 3 },
-    ratingText: { fontSize: 13, color: colors.foreground, fontWeight: "600" },
-    reviewText: { fontSize: 12, color: colors.muted },
-    bookBtn: {
-      backgroundColor: colors.primary, borderRadius: 10,
-      paddingVertical: 8, paddingHorizontal: 14,
-      flexDirection: "row", alignItems: "center", gap: 4,
-    },
-    bookBtnText: { color: "#fff", fontSize: 13, fontWeight: "600" },
-    emptyWrap: { alignItems: "center", paddingVertical: 40 },
-    emptyText: { fontSize: 15, color: colors.muted, marginTop: 8 },
-    emptySubText: { fontSize: 13, color: colors.muted, marginTop: 4 },
-  });
-
-  const renderInsight = () => {
-    if (!insight) return null;
-    const items = isCustomer
-      ? (insight.recommendations || []).map((r) => ({ title: r.title, desc: r.desc }))
-      : (insight.customerInsights || insight.trends || []).map((r) => ({ title: r.title, desc: r.desc }));
-    const tip = insight.tips || insight.suggestion || insight.action;
-
-    if (items.length === 0 && !tip) return null;
-
-    return (
-      <View style={s.insightCard}>
-        <View style={s.insightHeader}>
-          <Text style={{ fontSize: 18 }}>📊</Text>
-          <Text style={s.insightTitle}>{insight.title || "今日商机分析"}</Text>
-          <View style={s.insightBadge}>
-            <Text style={s.insightBadgeText}>AI生成</Text>
-          </View>
-        </View>
-        {items.slice(0, 3).map((item, i) => (
-          <View key={i} style={i < Math.min(items.length, 3) - 1 ? s.insightItem : s.insightItemLast}>
-            <View style={s.insightNum}>
-              <Text style={s.insightNumText}>{i + 1}</Text>
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={s.insightItemTitle}>{item.title}</Text>
-              {item.desc ? <Text style={s.insightItemDesc}>{item.desc}</Text> : null}
-            </View>
-          </View>
-        ))}
-        {tip ? (
-          <View style={s.insightTip}>
-            <Text style={s.insightTipText}>💡 {tip}</Text>
-          </View>
-        ) : null}
-      </View>
-    );
+  const resetChat = () => {
+    setPhase("setup");
+    setMessages([]);
+    setSessionId(undefined);
+    setInputText("");
   };
 
-  const renderMerchant = ({ item }: { item: Merchant }) => (
-    <TouchableOpacity
-      style={s.merchantCard}
-      onPress={() => router.push({ pathname: "/merchant/[id]", params: { id: item.id } } as never)}
-      activeOpacity={0.8}
-    >
-      <View style={s.merchantTop}>
-        <View style={{ flex: 1 }}>
-          <Text style={s.merchantName}>{item.businessName}</Text>
-          <Text style={s.merchantCatBadge}>{item.category}</Text>
-        </View>
-        <TouchableOpacity
-          style={s.bookBtn}
-          onPress={() => router.push({ pathname: "/appointment/new", params: { merchantId: item.id, merchantName: item.businessName } } as never)}
-        >
-          <Text style={{ fontSize: 13 }}>📅</Text>
-          <Text style={s.bookBtnText}>预约</Text>
-        </TouchableOpacity>
-      </View>
-      <Text style={s.merchantDesc} numberOfLines={2}>{item.description}</Text>
-      <View style={s.merchantMeta}>
-        <View style={s.ratingRow}>
-          <Text style={{ color: "#F59E0B", fontSize: 14 }}>★</Text>
-          <Text style={s.ratingText}>{item.rating?.toFixed(1) || "5.0"}</Text>
-          <Text style={s.reviewText}>({item.reviewCount || 0}条评价)</Text>
-        </View>
-        {item.address ? (
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
-            <Text style={{ fontSize: 12 }}>📍</Text>
-            <Text style={s.reviewText} numberOfLines={1}>{item.address}</Text>
-          </View>
-        ) : null}
-      </View>
-    </TouchableOpacity>
-  );
-
-  const hour = new Date().getHours();
-  const timeGreeting = hour < 12 ? "早上好" : hour < 18 ? "下午好" : "晚上好";
-
-  return (
-    <ScreenContainer>
-      {/* 顶部导航 */}
-      <View style={s.header}>
-        <View style={s.logoRow}>
-          <View style={s.logoCircle}>
-            <Text style={s.logoText}>寻</Text>
-          </View>
+  if (phase === "setup") {
+    return (
+      <SafeAreaView style={s.safe} edges={["top"]}>
+        <View style={s.header}>
+          <Image source={require("@/assets/images/icon.png")} style={s.logo} />
           <View>
             <Text style={s.appName}>寻商问道</Text>
-            <Text style={s.greeting}>{timeGreeting}，{user?.name || "朋友"} {isCustomer ? "🛒" : "🏪"}</Text>
+            <Text style={s.appSub}>AI 双向智能匹配平台</Text>
           </View>
         </View>
-        <TouchableOpacity style={s.notifBtn}>
-          <Text style={{ fontSize: 18 }}>🔔</Text>
-        </TouchableOpacity>
+        <ScrollView contentContainerStyle={s.setupContent} keyboardShouldPersistTaps="handled">
+          <Text style={s.sectionTitle}>我是</Text>
+          <View style={s.identityRow}>
+            {[
+              { id: "customer", emoji: "🙋", label: "顾客", sub: "寻找合适的商家" },
+              { id: "merchant", emoji: "🏪", label: "商家", sub: "寻找目标客户" },
+            ].map((opt) => {
+              const active = identity === opt.id;
+              return (
+                <Pressable
+                  key={opt.id}
+                  style={[s.identityCard, active && s.identityCardActive]}
+                  onPress={() => setIdentity(opt.id as "customer" | "merchant")}
+                >
+                  <Text style={s.identityEmoji}>{opt.emoji}</Text>
+                  <Text style={[s.identityLabel, active && { color: C.primary }]}>{opt.label}</Text>
+                  <Text style={s.identitySub}>{opt.sub}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          <Text style={s.sectionTitle}>联系手机号</Text>
+          <View style={s.phoneRow}>
+            <Text style={s.phonePrefix}>+86</Text>
+            <TextInput
+              style={s.phoneInput}
+              placeholder="输入手机号"
+              placeholderTextColor={C.muted}
+              keyboardType="phone-pad"
+              maxLength={11}
+              value={phone}
+              onChangeText={setPhone}
+            />
+          </View>
+          <Text style={s.phoneHint}>手机号用于保存你的偏好记忆，方便有缘人联系你</Text>
+
+          {identity && (
+            <>
+              <Text style={[s.sectionTitle, { marginTop: 24 }]}>快速开始</Text>
+              <View style={s.quickGrid}>
+                {quickStarts.map((qs) => (
+                  <Pressable
+                    key={qs}
+                    style={s.quickCard}
+                    onPress={() => {
+                      if (!/^1[3-9]\d{9}$/.test(phone)) { alert("请先输入正确的手机号"); return; }
+                      startChat(qs);
+                    }}
+                  >
+                    <Text style={s.quickCardText}>{qs}</Text>
+                    <Text style={s.quickCardArrow}>→</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </>
+          )}
+
+          <Pressable
+            style={[s.startBtn, (!identity || !/^1[3-9]\d{9}$/.test(phone)) && s.startBtnDisabled]}
+            onPress={() => startChat()}
+            disabled={!identity || !/^1[3-9]\d{9}$/.test(phone)}
+          >
+            <Text style={s.startBtnText}>✨ 开始 AI 匹配对话</Text>
+          </Pressable>
+
+          <View style={s.featureRow}>
+            {["🧠 记住你的偏好", "🌐 全网精准匹配", "🎯 越用越准"].map((f) => (
+              <View key={f} style={s.featureChip}>
+                <Text style={s.featureChipText}>{f}</Text>
+              </View>
+            ))}
+          </View>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaView style={s.safe} edges={["top"]}>
+      <View style={s.chatHeader}>
+        <Pressable onPress={resetChat} style={s.backBtn}>
+          <Text style={s.backBtnText}>← 返回</Text>
+        </Pressable>
+        <View style={s.chatHeaderCenter}>
+          <Text style={s.chatTitle}>道道 AI</Text>
+          <View style={s.onlineDot} />
+        </View>
+        <Text style={s.phoneTag}>{phone.slice(0, 3)}****{phone.slice(-4)}</Text>
       </View>
 
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={() => { setRefreshing(true); loadData(); }}
-            tintColor={colors.primary}
-          />
-        }
-      >
-        {/* AI 入口卡片 */}
-        <TouchableOpacity
-          style={s.aiCard}
-          onPress={() => router.push("/(tabs)/ai-chat" as never)}
-          activeOpacity={0.92}
-        >
-          <View style={s.aiCardTop}>
-            <View style={s.aiCardIcon}>
-              <Text style={{ fontSize: 22 }}>✨</Text>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        <ScrollView ref={scrollRef} style={s.msgList} contentContainerStyle={s.msgListContent} keyboardShouldPersistTaps="handled">
+          {messages.length === 0 && (
+            <View style={s.welcomeHint}>
+              <Text style={s.welcomeEmoji}>🧭</Text>
+              <Text style={s.welcomeTitle}>我是道道，你的 AI 匹配顾问</Text>
+              <Text style={s.welcomeSub}>我会通过几个问题深度了解你的需求{"\n"}然后为你精准匹配最合适的有缘人</Text>
             </View>
-            <Text style={s.aiCardTitle}>道道 AI 助手</Text>
-          </View>
-          <Text style={s.aiCardSub}>
-            {isCustomer
-              ? "告诉AI您的需求，自动帮您找到最合适的商家并完成预约"
-              : "让AI分析市场需求，精准推荐潜在客户，主动联系预约"}
-          </Text>
-          <View style={s.aiCardBtn}>
-            <Text style={{ fontSize: 16 }}>💬</Text>
-            <Text style={s.aiCardBtnText}>开始对话</Text>
-          </View>
-        </TouchableOpacity>
+          )}
 
-        {/* 今日商机 */}
-        {loading ? (
-          <View style={{ alignItems: "center", padding: 24 }}>
-            <ActivityIndicator color={colors.primary} />
-            <Text style={{ color: colors.muted, marginTop: 8, fontSize: 13 }}>AI正在分析今日商机...</Text>
-          </View>
-        ) : renderInsight()}
+          {messages.map((msg) => (
+            <View key={msg.id}>
+              <View style={[s.msgRow, msg.role === "user" && s.msgRowUser]}>
+                {msg.role === "assistant" && (
+                  <Image source={require("@/assets/images/icon.png")} style={s.aiAvatarImg} />
+                )}
+                <View style={[s.msgBubble, msg.role === "user" ? s.userBubble : s.aiBubble]}>
+                  <Text style={[s.msgText, msg.role === "user" && { color: "#fff" }]}>{msg.content}</Text>
+                </View>
+              </View>
 
-        {/* 商家/客户列表 */}
-        <View style={s.sectionHeader}>
-          <Text style={s.sectionTitle}>
-            {isCustomer ? "推荐商家" : "潜在客户群"}
-          </Text>
-          <TouchableOpacity onPress={() => router.push("/(tabs)/search" as never)}>
-            <Text style={s.seeAll}>查看全部 →</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* 分类筛选 */}
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={s.catScroll}
-          style={{ marginBottom: 12 }}
-        >
-          {CATEGORIES.map((cat) => (
-            <TouchableOpacity
-              key={cat.id}
-              style={[
-                s.catItem,
-                {
-                  borderColor: selectedCat === cat.id ? colors.primary : colors.border,
-                  backgroundColor: selectedCat === cat.id ? colors.primary + "15" : colors.surface,
-                },
-              ]}
-              onPress={() => setSelectedCat(cat.id)}
-            >
-              <Text style={s.catIcon}>{cat.icon}</Text>
-              <Text style={[s.catLabel, { color: selectedCat === cat.id ? colors.primary : colors.muted }]}>
-                {cat.label}
-              </Text>
-            </TouchableOpacity>
+              {msg.matchResult && (
+                <View style={s.matchResultContainer}>
+                  <Text style={s.matchResultTitle}>🎯 为你找到的有缘人</Text>
+                  <Text style={s.matchResultSummary}>{msg.matchResult.summary}</Text>
+                  {msg.matchResult.matches.map((m, i) => (
+                    <View key={i} style={s.matchCard}>
+                      <View style={s.matchCardTop}>
+                        <Text style={s.matchName}>{m.name}</Text>
+                        <View style={s.scoreBadge}><Text style={s.scoreText}>{m.score}分</Text></View>
+                      </View>
+                      {m.area && <Text style={s.matchArea}>📍 {m.area}</Text>}
+                      <Text style={s.matchDesc}>{m.description}</Text>
+                      <Text style={s.matchReason}>✓ {m.reason}</Text>
+                      <Text style={s.matchTip}>💡 {m.contactTip}</Text>
+                    </View>
+                  ))}
+                  {msg.matchResult.tips && (
+                    <View style={s.tipsBox}><Text style={s.tipsText}>💬 {msg.matchResult.tips}</Text></View>
+                  )}
+                  <Pressable style={s.rematchBtn} onPress={() => sendMessage("帮我重新匹配，有更多要求")}>
+                    <Text style={s.rematchBtnText}>继续追问，更精准匹配 →</Text>
+                  </Pressable>
+                </View>
+              )}
+            </View>
           ))}
+
+          {loading && (
+            <View style={s.msgRow}>
+              <Image source={require("@/assets/images/icon.png")} style={s.aiAvatarImg} />
+              <View style={[s.msgBubble, s.aiBubble, { flexDirection: "row", gap: 8, alignItems: "center" }]}>
+                <ActivityIndicator size="small" color={C.primary} />
+                <Text style={{ fontSize: 14, color: C.muted }}>道道正在思考...</Text>
+              </View>
+            </View>
+          )}
         </ScrollView>
 
-        {loading ? (
-          <ActivityIndicator color={colors.primary} style={{ marginTop: 20 }} />
-        ) : merchants.length === 0 ? (
-          <View style={s.emptyWrap}>
-            <Text style={{ fontSize: 48 }}>🏪</Text>
-            <Text style={s.emptyText}>暂无商家</Text>
-            <Text style={s.emptySubText}>
-              {isCustomer ? "快去AI对话让助手帮您找" : "注册成为商家，获取更多客户"}
-            </Text>
-          </View>
-        ) : (
-          <FlatList
-            data={merchants.slice(0, 8)}
-            renderItem={renderMerchant}
-            keyExtractor={(item) => String(item.id)}
-            scrollEnabled={false}
+        <View style={s.inputBar}>
+          <TextInput
+            style={s.inputField}
+            placeholder="告诉道道你的需求..."
+            placeholderTextColor={C.muted}
+            value={inputText}
+            onChangeText={setInputText}
+            multiline
+            maxLength={500}
           />
-        )}
-
-        <View style={{ height: 24 }} />
-      </ScrollView>
-    </ScreenContainer>
+          <Pressable
+            style={[s.sendBtn, (!inputText.trim() || loading) && s.sendBtnDisabled]}
+            onPress={() => sendMessage(inputText)}
+            disabled={!inputText.trim() || loading}
+          >
+            <Text style={s.sendBtnText}>↑</Text>
+          </Pressable>
+        </View>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
+
+const s = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: C.bg },
+  header: {
+    flexDirection: "row", alignItems: "center", gap: 12,
+    paddingHorizontal: 20, paddingTop: 12, paddingBottom: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.border,
+  },
+  logo: { width: 34, height: 34, borderRadius: 8 },
+  appName: { fontSize: 17, fontWeight: "700", color: C.text },
+  appSub: { fontSize: 12, color: C.muted, marginTop: 1 },
+  setupContent: { paddingHorizontal: 20, paddingTop: 24, paddingBottom: 60 },
+  sectionTitle: { fontSize: 13, fontWeight: "700", color: C.muted, letterSpacing: 0.5, marginBottom: 12 },
+  identityRow: { flexDirection: "row", gap: 12, marginBottom: 28 },
+  identityCard: {
+    flex: 1, borderRadius: 16, padding: 18, alignItems: "center", gap: 6,
+    borderWidth: 1.5, borderColor: C.border, backgroundColor: C.surface,
+  },
+  identityCardActive: { borderColor: C.primary, backgroundColor: C.primaryLight },
+  identityEmoji: { fontSize: 28 },
+  identityLabel: { fontSize: 15, fontWeight: "700", color: C.text },
+  identitySub: { fontSize: 12, color: C.muted, textAlign: "center" },
+  phoneRow: {
+    flexDirection: "row", alignItems: "center",
+    borderWidth: 1, borderColor: C.border, borderRadius: 12,
+    backgroundColor: C.surface, paddingHorizontal: 14, marginBottom: 6,
+  },
+  phonePrefix: { fontSize: 15, color: C.text, fontWeight: "600", marginRight: 8 },
+  phoneInput: { flex: 1, fontSize: 15, color: C.text, paddingVertical: 13 },
+  phoneHint: { fontSize: 12, color: C.muted, marginBottom: 0 },
+  quickGrid: { gap: 10, marginBottom: 28 },
+  quickCard: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    padding: 14, borderRadius: 12, backgroundColor: C.surface,
+    borderWidth: 1, borderColor: C.border,
+  },
+  quickCardText: { fontSize: 14, color: C.text, flex: 1 },
+  quickCardArrow: { fontSize: 16, color: C.muted },
+  startBtn: {
+    backgroundColor: C.primary, borderRadius: 14,
+    paddingVertical: 15, alignItems: "center", marginBottom: 20,
+  },
+  startBtnDisabled: { backgroundColor: C.border },
+  startBtnText: { fontSize: 16, fontWeight: "700", color: "#fff" },
+  featureRow: { flexDirection: "row", gap: 8, flexWrap: "wrap", justifyContent: "center" },
+  featureChip: {
+    paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20,
+    backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
+  },
+  featureChipText: { fontSize: 12, color: C.muted },
+  chatHeader: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    paddingHorizontal: 16, paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.border,
+  },
+  backBtn: { paddingVertical: 4, paddingRight: 12 },
+  backBtnText: { fontSize: 14, color: C.primary, fontWeight: "600" },
+  chatHeaderCenter: { flexDirection: "row", alignItems: "center", gap: 6 },
+  chatTitle: { fontSize: 16, fontWeight: "700", color: C.text },
+  onlineDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.primary },
+  phoneTag: { fontSize: 12, color: C.muted },
+  msgList: { flex: 1 },
+  msgListContent: { paddingHorizontal: 16, paddingTop: 20, paddingBottom: 20, gap: 16 },
+  welcomeHint: { alignItems: "center", paddingVertical: 40, gap: 10 },
+  welcomeEmoji: { fontSize: 48 },
+  welcomeTitle: { fontSize: 18, fontWeight: "700", color: C.text },
+  welcomeSub: { fontSize: 14, color: C.muted, textAlign: "center", lineHeight: 22 },
+  msgRow: { flexDirection: "row", alignItems: "flex-end", gap: 8 },
+  msgRowUser: { flexDirection: "row-reverse" },
+  aiAvatar: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: C.primary, alignItems: "center", justifyContent: "center",
+  },
+  aiAvatarText: { fontSize: 13, fontWeight: "700", color: "#fff" },
+  aiAvatarImg: { width: 32, height: 32, borderRadius: 16 },
+  msgBubble: { maxWidth: "78%", borderRadius: 18, paddingHorizontal: 14, paddingVertical: 10 },
+  aiBubble: { backgroundColor: C.aiMsg, borderBottomLeftRadius: 4 },
+  userBubble: { backgroundColor: C.userMsg, borderBottomRightRadius: 4 },
+  msgText: { fontSize: 15, color: C.text, lineHeight: 22 },
+  matchResultContainer: {
+    marginTop: 8, marginLeft: 40,
+    borderRadius: 16, borderWidth: 1, borderColor: C.border,
+    backgroundColor: C.matchCard, padding: 16, gap: 10,
+  },
+  matchResultTitle: { fontSize: 15, fontWeight: "700", color: C.text },
+  matchResultSummary: { fontSize: 13, color: C.muted, lineHeight: 20 },
+  matchCard: {
+    borderRadius: 12, borderWidth: 1, borderColor: C.matchBorder,
+    backgroundColor: "#fff", padding: 14, gap: 5,
+  },
+  matchCardTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  matchName: { fontSize: 15, fontWeight: "700", color: C.text, flex: 1 },
+  scoreBadge: {
+    backgroundColor: C.primaryLight, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8,
+  },
+  scoreText: { fontSize: 12, fontWeight: "700", color: C.primary },
+  matchArea: { fontSize: 12, color: C.muted },
+  matchDesc: { fontSize: 13, color: C.text, lineHeight: 19 },
+  matchReason: { fontSize: 12, color: C.primary, lineHeight: 18 },
+  matchTip: { fontSize: 12, color: C.muted, lineHeight: 18 },
+  tipsBox: { backgroundColor: C.primaryLight, borderRadius: 10, padding: 12 },
+  tipsText: { fontSize: 13, color: C.primary, lineHeight: 20 },
+  rematchBtn: {
+    paddingVertical: 10, alignItems: "center",
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.border, marginTop: 4,
+  },
+  rematchBtnText: { fontSize: 13, color: C.primary, fontWeight: "600" },
+  inputBar: {
+    flexDirection: "row", alignItems: "flex-end", gap: 10,
+    paddingHorizontal: 16, paddingVertical: 12,
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.border,
+    backgroundColor: C.bg,
+  },
+  inputField: {
+    flex: 1, borderRadius: 22, borderWidth: 1, borderColor: C.border,
+    backgroundColor: C.surface, paddingHorizontal: 16, paddingVertical: 10,
+    fontSize: 15, color: C.text, maxHeight: 120,
+  },
+  sendBtn: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: C.primary, alignItems: "center", justifyContent: "center",
+  },
+  sendBtnDisabled: { backgroundColor: C.border },
+  sendBtnText: { fontSize: 20, color: "#fff", fontWeight: "700", lineHeight: 24 },
+});

@@ -78,3 +78,22 @@
 - [ ] 商家资料完善页面
 - [ ] 数据库自动备份
 - [ ] HTTPS配置
+
+## AI深度需求理解 + 用户画像记忆（新增）
+- [x] 后端：drizzle schema添加userProfiles表（手机号+画像JSON+历史需求）
+- [x] 后端：drizzle schema添加matchSessions表（多轮对话会话存储）
+- [x] 后端：qwen.ts添加qwenDeepNeedChat（AI多轮追问引擎）
+- [x] 后端：qwen.ts添加qwenPreciseMatch（信息充足后精准匹配）
+- [x] 后端：qwen.ts添加qwenBuildProfile（构建/更新用户画像）
+- [x] 后端：routers.ts添加match.chat多轮对话路由（公开接口，无需登录）
+- [x] 后端：routers.ts添加match.getProfile路由（查询用户画像）
+- [x] 前端：首页重设计为ChatGPT对话式界面（道道AI顾问）
+- [x] 前端：我的页面重设计为用户画像展示（无需登录）
+- [x] 去掉登录注册流程，直接用手机号进入
+
+## Qwen语音模型集成（新增）
+- [ ] 后端：接入通义千问CosyVoice TTS语音合成API
+- [ ] 后端：添加tts路由，将AI文字回复转为语音流
+- [ ] 前端：道道AI对话界面每条AI消息添加🔊播放按钮
+- [ ] 前端：集成expo-av音频播放，支持流式语音播放
+- [ ] 前端：语音播放状态管理（播放中/暂停/停止）

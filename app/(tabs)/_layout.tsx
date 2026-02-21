@@ -1,26 +1,15 @@
-import { Tabs, router } from "expo-router";
-import { useEffect } from "react";
-import { Platform } from "react-native";
+import { Tabs } from "expo-router";
+import { Platform, StyleSheet } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { HapticTab } from "@/components/haptic-tab";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { useColors } from "@/hooks/use-colors";
-import { useAuth } from "@/lib/auth-context";
 
 export default function TabLayout() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { user, isLoading } = useAuth();
   const bottomPadding = Platform.OS === "web" ? 12 : Math.max(insets.bottom, 8);
   const tabBarHeight = 56 + bottomPadding;
-
-  useEffect(() => {
-    if (!isLoading && !user) {
-      router.replace("/(auth)/login");
-    }
-  }, [user, isLoading]);
-
-  if (!user) return null;
 
   return (
     <Tabs
@@ -33,9 +22,9 @@ export default function TabLayout() {
           paddingTop: 8,
           paddingBottom: bottomPadding,
           height: tabBarHeight,
-          backgroundColor: colors.surface,
+          backgroundColor: colors.background,
           borderTopColor: colors.border,
-          borderTopWidth: 0.5,
+          borderTopWidth: StyleSheet.hairlineWidth,
         },
         tabBarLabelStyle: { fontSize: 11, fontWeight: "600" },
       }}
@@ -43,29 +32,22 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: "首页",
-          tabBarIcon: ({ color }) => <IconSymbol size={26} name="house.fill" color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="ai-chat"
-        options={{
-          title: "AI助手",
+          title: "匹配",
           tabBarIcon: ({ color }) => <IconSymbol size={26} name="sparkles" color={color} />,
         }}
       />
       <Tabs.Screen
         name="search"
         options={{
-          title: "搜索",
+          title: "发现",
           tabBarIcon: ({ color }) => <IconSymbol size={26} name="magnifyingglass" color={color} />,
         }}
       />
       <Tabs.Screen
-        name="match"
+        name="ai-chat"
         options={{
-          title: "匹配",
-          tabBarIcon: ({ color }) => <IconSymbol size={26} name="person.2.fill" color={color} />,
+          title: "AI 对话",
+          tabBarIcon: ({ color }) => <IconSymbol size={26} name="bubble.left.and.bubble.right.fill" color={color} />,
         }}
       />
       <Tabs.Screen
@@ -82,6 +64,12 @@ export default function TabLayout() {
           tabBarIcon: ({ color }) => <IconSymbol size={26} name="person.fill" color={color} />,
         }}
       />
+      {/* 隐藏match tab，功能合并到首页 */}
+      <Tabs.Screen
+        name="match"
+        options={{ href: null }}
+      />
     </Tabs>
   );
 }
+

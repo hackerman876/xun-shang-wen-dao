@@ -71,6 +71,15 @@ export const api = {
       trpcMutation("match.findCustomers", data, token),
     findMerchants: (data: { need: string; budget?: string; area?: string; urgency?: string }, token: string) =>
       trpcMutation("match.findMerchants", data, token),
+    // 无需登录的统一匹配入口
+    find: (data: { identity: "customer" | "merchant"; phone: string; need: string }) =>
+      trpcMutation("match.findPublic", data),
+    // AI多轮追问对话（无需登录）
+    chat: (data: { sessionId?: string; phone: string; identity: "customer" | "merchant"; message: string }) =>
+      trpcMutation("match.chat", data),
+    // 获取用户画像
+    getProfile: (phone: string) =>
+      trpcQuery("match.getProfile", { phone }),
   },
   insight: {
     today: (token: string) => trpcQuery("insight.today"),

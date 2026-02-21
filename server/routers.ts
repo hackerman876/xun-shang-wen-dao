@@ -7,7 +7,8 @@ import { invokeLLM } from "./_core/llm";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import * as db from "./db";
-import { qwenChat, qwenDailyInsight, qwenAppointmentSummary, qwenSimulateCall, qwenSearchMerchant, qwenIndustryAnalysis, qwenMatchCustomers, qwenMatchMerchants } from "./qwen";
+import { qwenChat, qwenDailyInsight, qwenAppointmentSummary, qwenSimulateCall, qwenSearchMerchant, qwenIndustryAnalysis, qwenMatchCustomers, qwenMatchMerchants, qwenDeepNeedChat, qwenPreciseMatch, qwenBuildProfile } from "./qwen";
+import { randomUUID } from "crypto";
 
 const JWT_SECRET = new TextEncoder().encode(
   process.env.JWT_SECRET || "xun-shang-wen-dao-secret-2026"
@@ -307,6 +308,130 @@ export const appRouter = router({
           })),
         });
         return { success: true, ...result, localMerchants, matchedAt: new Date().toISOString() };
+      }),
+
+    // 多轮追问对话（无需登录，基于手机号）
+    chat: publicProcedure
+      .input(z.object({
+        sessionId: z.string().optional(),
+        phone: z.string().regex(/^1[3-9]\d{9}$/, "请输入正确的手机号"),
+        identity: z.enum(["customer", "merchant"]),
+        message: z.string().min(1).max(500),
+      }))
+      .mutation(async ({ input }) => {
+        const { phone, identity, message } = input;
+        let sessionId = input.sessionId;
+
+        // 获取或创建会话
+        let session = sessionId ? await db.getMatchSession(sessionId) : null;
+        if (!session) {
+          sessionId = randomUUID();
+          // 获取用户历史画像
+          const profile = await db.getUserProfileByPhone(phone);
+          const welcomeMsg = identity === "customer"
+            ? `你好！我是道道，你的AI匹配顾问 🧭\n\n我会帮你找到最合适的商家有缘人。${profile?.profileJson ? "我记得你之前的偏好，" : ""}请告诉我，你现在需要什么服务或产品？`
+            : `你好！我是道道，你的AI匹配顾问 🧭\n\n我会帮你找到最合适的目标客户。${profile?.profileJson ? "我记得你的业务信息，" : ""}请告诉我，你的业务是做什么的？`;
+
+          const initMessages = JSON.stringify([{ role: "assistant", content: welcomeMsg, timestamp: Date.now() }]);
+          await db.createMatchSession({ sessionId, phone, identity, messages: initMessages });
+          session = await db.getMatchSession(sessionId);
+        }
+
+        if (!session) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "会话创建失败" });
+
+        // 解析历史消息
+        const messages: Array<{ role: string; content: string; timestamp: number }> = JSON.parse(session.messages || "[]");
+        messages.push({ role: "user", content: message, timestamp: Date.now() });
+
+        // 获取用户画像
+        const profile = await db.getUserProfileByPhone(phone);
+
+        // 调用AI多轮追问
+        const aiResult = await qwenDeepNeedChat({
+          identity,
+          phone,
+          messages: messages.map(m => ({ role: m.role as "user" | "assistant", content: m.content })),
+          userProfile: profile?.profileJson,
+          collectedInfo: session.collectedInfo,
+        });
+
+        messages.push({ role: "assistant", content: aiResult.reply, timestamp: Date.now() });
+
+        // 更新会话
+        await db.updateMatchSession(sessionId!, {
+          messages: JSON.stringify(messages),
+          collectedInfo: aiResult.updatedCollectedInfo,
+        });
+
+        // 如果AI认为信息足够，开始精准匹配
+        if (aiResult.shouldMatch) {
+          const matchResult = await qwenPreciseMatch({
+            identity,
+            phone,
+            collectedInfo: aiResult.updatedCollectedInfo,
+            userProfile: profile?.profileJson,
+          });
+
+          // 构建/更新用户画像
+          const newProfileJson = await qwenBuildProfile({
+            identity,
+            collectedInfo: aiResult.updatedCollectedInfo,
+            existingProfile: profile?.profileJson,
+            matchTags: matchResult.profileTags,
+          });
+
+          // 更新需求历史
+          const needsHistory = JSON.parse(profile?.needsHistory || "[]");
+          needsHistory.unshift({ need: aiResult.updatedCollectedInfo.slice(0, 100), matchedAt: new Date().toISOString() });
+          if (needsHistory.length > 20) needsHistory.pop();
+
+          await db.upsertUserProfile({
+            phone,
+            identity,
+            profileJson: newProfileJson,
+            needsHistory: JSON.stringify(needsHistory),
+            totalMatches: (profile?.totalMatches || 0) + 1,
+          });
+
+          await db.updateMatchSession(sessionId!, {
+            isMatched: true,
+            matchResult: JSON.stringify(matchResult),
+          });
+
+          return {
+            sessionId,
+            reply: aiResult.reply,
+            shouldMatch: true,
+            matchResult,
+            collectedInfo: aiResult.updatedCollectedInfo,
+          };
+        }
+
+        return {
+          sessionId,
+          reply: aiResult.reply,
+          shouldMatch: false,
+          matchResult: null,
+          collectedInfo: aiResult.updatedCollectedInfo,
+        };
+      }),
+
+    // 获取用户画像
+    getProfile: publicProcedure
+      .input(z.object({ phone: z.string().regex(/^1[3-9]\d{9}$/) }))
+      .query(async ({ input }) => {
+        const profile = await db.getUserProfileByPhone(input.phone);
+        if (!profile) return null;
+        return {
+          phone: profile.phone,
+          identity: profile.identity,
+          name: profile.name,
+          area: profile.area,
+          profileJson: profile.profileJson ? JSON.parse(profile.profileJson) : null,
+          needsHistory: profile.needsHistory ? JSON.parse(profile.needsHistory) : [],
+          totalMatches: profile.totalMatches,
+          updatedAt: profile.updatedAt,
+        };
       }),
   }),
 

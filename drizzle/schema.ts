@@ -101,3 +101,42 @@ export const chatMessages = mysqlTable("chat_messages", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 export type ChatMessage = typeof chatMessages.$inferSelect;
+
+// ── 用户画像表（基于手机号，无需登录）──────────────────────────────
+export const userProfiles = mysqlTable("user_profiles", {
+  id: int("id").autoincrement().primaryKey(),
+  phone: varchar("phone", { length: 20 }).notNull().unique(),
+  identity: mysqlEnum("identity", ["customer", "merchant"]).default("customer").notNull(),
+  name: varchar("name", { length: 100 }),
+  area: varchar("area", { length: 200 }),
+  // AI构建的用户画像（JSON）: { tags, preferences, personality, needs, budget, industry }
+  profileJson: text("profileJson"),
+  // 需求历史（JSON数组）: [{need, matchedAt, category}]
+  needsHistory: text("needsHistory"),
+  // 匹配记录（JSON数组）: [{matchedPhone, matchedName, matchedAt, score}]
+  matchHistory: text("matchHistory"),
+  totalMatches: int("totalMatches").default(0).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type UserProfile = typeof userProfiles.$inferSelect;
+export type InsertUserProfile = typeof userProfiles.$inferInsert;
+
+// ── 匹配对话表（多轮追问记录）──────────────────────────────────────
+export const matchSessions = mysqlTable("match_sessions", {
+  id: int("id").autoincrement().primaryKey(),
+  sessionId: varchar("sessionId", { length: 64 }).notNull().unique(),
+  phone: varchar("phone", { length: 20 }).notNull(),
+  identity: mysqlEnum("identity", ["customer", "merchant"]).notNull(),
+  // 对话历史（JSON数组）: [{role, content, timestamp}]
+  messages: text("messages").notNull(),
+  // AI已收集到的信息摘要（JSON）
+  collectedInfo: text("collectedInfo"),
+  // 是否已完成匹配
+  isMatched: boolean("isMatched").default(false).notNull(),
+  matchResult: text("matchResult"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type MatchSession = typeof matchSessions.$inferSelect;
+export type InsertMatchSession = typeof matchSessions.$inferInsert;

@@ -6,8 +6,10 @@ import {
   InsertUser,
   appointments,
   chatMessages,
+  matchSessions,
   merchants,
   phoneCodes,
+  userProfiles,
   users,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
@@ -206,4 +208,79 @@ export async function getChatHistory(userId: number, sessionId: string) {
   return db.select().from(chatMessages)
     .where(and(eq(chatMessages.userId, userId), eq(chatMessages.sessionId, sessionId)))
     .orderBy(chatMessages.createdAt).limit(50);
+}
+
+// ── 用户画像（基于手机号）────────────────────────────────────────
+
+export async function getUserProfileByPhone(phone: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const r = await db.select().from(userProfiles).where(eq(userProfiles.phone, phone)).limit(1);
+  return r[0];
+}
+
+export async function upsertUserProfile(data: {
+  phone: string;
+  identity?: "customer" | "merchant";
+  name?: string;
+  area?: string;
+  profileJson?: string;
+  needsHistory?: string;
+  matchHistory?: string;
+  totalMatches?: number;
+}) {
+  const db = await getDb();
+  if (!db) return;
+  const updateSet: Record<string, unknown> = { updatedAt: new Date() };
+  if (data.identity) updateSet.identity = data.identity;
+  if (data.name) updateSet.name = data.name;
+  if (data.area) updateSet.area = data.area;
+  if (data.profileJson) updateSet.profileJson = data.profileJson;
+  if (data.needsHistory) updateSet.needsHistory = data.needsHistory;
+  if (data.matchHistory) updateSet.matchHistory = data.matchHistory;
+  if (data.totalMatches !== undefined) updateSet.totalMatches = data.totalMatches;
+  await db.insert(userProfiles).values({
+    phone: data.phone,
+    identity: data.identity || "customer",
+    name: data.name,
+    area: data.area,
+    profileJson: data.profileJson,
+    needsHistory: data.needsHistory,
+    matchHistory: data.matchHistory,
+    totalMatches: data.totalMatches || 0,
+  }).onDuplicateKeyUpdate({ set: updateSet });
+}
+
+// ── 匹配对话会话 ──────────────────────────────────────────────────
+
+export async function getMatchSession(sessionId: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const r = await db.select().from(matchSessions).where(eq(matchSessions.sessionId, sessionId)).limit(1);
+  return r[0];
+}
+
+export async function createMatchSession(data: {
+  sessionId: string;
+  phone: string;
+  identity: "customer" | "merchant";
+  messages: string;
+}) {
+  const db = await getDb();
+  if (!db) return;
+  await db.insert(matchSessions).values({
+    ...data,
+    isMatched: false,
+  });
+}
+
+export async function updateMatchSession(sessionId: string, data: {
+  messages?: string;
+  collectedInfo?: string;
+  isMatched?: boolean;
+  matchResult?: string;
+}) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(matchSessions).set({ ...data, updatedAt: new Date() }).where(eq(matchSessions.sessionId, sessionId));
 }

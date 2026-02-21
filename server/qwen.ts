@@ -597,3 +597,216 @@ export async function qwenIndustryAnalysis(industry: string): Promise<string> {
   ], 800, true); // 行业分析全开联网
   return result.reply;
 }
+
+/**
+ * AI多轮追问对话 - 深度了解用户需求
+ * 根据对话历史和用户画像，决定继续追问还是开始匹配
+ */
+export async function qwenDeepNeedChat(params: {
+  identity: "customer" | "merchant";
+  phone: string;
+  messages: Array<{ role: "user" | "assistant"; content: string }>;
+  userProfile?: string | null; // 已有的用户画像JSON
+  collectedInfo?: string | null; // 已收集的信息摘要
+}): Promise<{
+  reply: string;
+  shouldMatch: boolean; // 是否已收集足够信息，可以开始匹配
+  updatedCollectedInfo: string; // 更新后的信息摘要
+  profileUpdate?: Record<string, unknown>; // 需要更新到用户画像的字段
+}> {
+  const { identity, messages, userProfile, collectedInfo } = params;
+  const isCustomer = identity === "customer";
+
+  const systemPrompt = `你是"寻商问道"平台的AI匹配顾问，名叫"道道"。你的核心任务是通过自然对话，深度了解用户需求，然后为他们精准匹配有缘人。
+
+用户身份：${isCustomer ? "顾客（寻找商家服务）" : "商家（寻找目标客户）"}
+${userProfile ? `用户历史画像：${userProfile}` : ""}
+${collectedInfo ? `本次已收集信息：${collectedInfo}` : ""}
+
+【追问策略】
+你需要通过2-4轮对话收集以下关键信息：
+${isCustomer ? `
+顾客需要收集：
+1. 具体需求是什么（服务类型、产品类型）
+2. 在哪个城市/区域
+3. 预算范围大概是多少
+4. 时间要求（紧急程度、期望什么时候）
+5. 有什么特殊要求或偏好
+` : `
+商家需要收集：
+1. 做什么行业/提供什么服务
+2. 在哪个城市/区域经营
+3. 目标客户群体是谁（年龄、消费能力、特征）
+4. 希望找什么类型的合作或客户
+5. 有什么优势或特色
+`}
+
+【判断标准】
+- 如果已收集到3个以上关键信息，且用户需求基本清晰，设置shouldMatch=true开始匹配
+- 如果信息不足，继续追问，每次只问1-2个最重要的问题
+- 追问要自然、友好，像朋友聊天一样，不要像填表格
+
+【回复格式】
+必须返回严格的JSON格式：
+{
+  "reply": "你对用户说的话（自然语言，友好亲切）",
+  "shouldMatch": false,
+  "updatedCollectedInfo": "更新后的信息摘要（简洁列出已知信息）",
+  "profileUpdate": {
+    "area": "地区（如果提到了）",
+    "tags": ["标签1", "标签2"],
+    "preferences": "偏好描述"
+  }
+}`;
+
+  const result = await invokeQwen([
+    { role: "system", content: systemPrompt },
+    ...messages,
+  ], 1000, false); // 追问阶段不需要联网
+
+  try {
+    const jsonMatch = result.reply.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      return {
+        reply: parsed.reply || "请告诉我更多关于您的需求",
+        shouldMatch: parsed.shouldMatch === true,
+        updatedCollectedInfo: parsed.updatedCollectedInfo || collectedInfo || "",
+        profileUpdate: parsed.profileUpdate,
+      };
+    }
+  } catch { /* ignore */ }
+
+  return {
+    reply: result.reply,
+    shouldMatch: false,
+    updatedCollectedInfo: collectedInfo || "",
+  };
+}
+
+/**
+ * AI基于深度了解的精准匹配
+ * 在收集足够信息后，进行全网精准匹配
+ */
+export async function qwenPreciseMatch(params: {
+  identity: "customer" | "merchant";
+  phone: string;
+  collectedInfo: string;
+  userProfile?: string | null;
+}): Promise<{
+  summary: string;
+  matches: Array<{
+    name: string;
+    description: string;
+    reason: string;
+    score: number;
+    contactTip: string;
+    area?: string;
+    category?: string;
+  }>;
+  profileTags: string[]; // 从本次对话提炼的用户标签
+  tips: string;
+}> {
+  const { identity, collectedInfo, userProfile } = params;
+  const isCustomer = identity === "customer";
+
+  const result = await invokeQwen([
+    {
+      role: "system",
+      content: `你是"寻商问道"平台的AI精准匹配引擎。基于用户深度需求信息，联网搜索并匹配最合适的有缘人。`
+    },
+    {
+      role: "user",
+      content: `请基于以下深度了解的用户信息，联网搜索并匹配最合适的${isCustomer ? "商家" : "客户群体"}：
+
+用户身份：${isCustomer ? "顾客" : "商家"}
+深度需求信息：${collectedInfo}
+${userProfile ? `用户历史偏好：${userProfile}` : ""}
+
+请联网搜索相关信息，返回JSON格式：
+{
+  "summary": "基于深度了解的匹配总结（说明为什么这些是最合适的有缘人，150字内）",
+  "matches": [
+    {
+      "name": "${isCustomer ? "商家名称或类型" : "客户群体名称"}",
+      "description": "详细描述（100字内）",
+      "reason": "精准匹配理由（结合用户具体需求说明）",
+      "score": 95,
+      "contactTip": "具体的联系或接触建议",
+      "area": "所在区域",
+      "category": "类别"
+    }
+  ],
+  "profileTags": ["标签1", "标签2", "标签3"],
+  "tips": "给用户的个性化建议（结合其具体情况）"
+}
+返回5-6个最精准的匹配结果，按匹配度降序排列。`
+    }
+  ], 2500, true); // 匹配阶段全开联网
+
+  try {
+    const jsonMatch = result.reply.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      return {
+        summary: parsed.summary || "精准匹配完成",
+        matches: parsed.matches || [],
+        profileTags: parsed.profileTags || [],
+        tips: parsed.tips || "",
+      };
+    }
+  } catch { /* ignore */ }
+
+  return {
+    summary: "匹配分析完成",
+    matches: [],
+    profileTags: [],
+    tips: result.reply.slice(0, 200),
+  };
+}
+
+/**
+ * AI构建/更新用户画像
+ */
+export async function qwenBuildProfile(params: {
+  identity: "customer" | "merchant";
+  collectedInfo: string;
+  existingProfile?: string | null;
+  matchTags?: string[];
+}): Promise<string> {
+  const { identity, collectedInfo, existingProfile, matchTags } = params;
+
+  const result = await invokeQwen([
+    {
+      role: "system",
+      content: "你是用户画像分析AI。根据用户的需求信息，构建或更新用户画像，以JSON格式返回。"
+    },
+    {
+      role: "user",
+      content: `请根据以下信息构建用户画像：
+
+用户身份：${identity === "customer" ? "顾客" : "商家"}
+本次需求信息：${collectedInfo}
+${existingProfile ? `已有画像：${existingProfile}` : ""}
+${matchTags?.length ? `本次匹配标签：${matchTags.join("、")}` : ""}
+
+返回JSON格式的用户画像（合并已有画像和新信息）：
+{
+  "tags": ["标签1", "标签2", ...],
+  "area": "常驻地区",
+  "preferences": "偏好描述",
+  "budget": "预算范围",
+  "personality": "用户特征",
+  "industry": "行业（商家）或消费类型（顾客）",
+  "lastNeed": "最近一次需求摘要",
+  "summary": "一句话画像总结"
+}`
+    }
+  ], 600, false);
+
+  try {
+    const jsonMatch = result.reply.match(/\{[\s\S]*\}/);
+    if (jsonMatch) return jsonMatch[0];
+  } catch { /* ignore */ }
+  return result.reply;
+}
