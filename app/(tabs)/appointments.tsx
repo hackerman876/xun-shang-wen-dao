@@ -1,255 +1,259 @@
-import { ScreenContainer } from "@/components/screen-container";
-import { IconSymbol } from "@/components/ui/icon-symbol";
-import { useColors } from "@/hooks/use-colors";
+/**
+ * 预约页 — 手机号查询预约记录（无需登录）
+ * ChatGPT 极简风格
+ */
 import { api } from "@/lib/api";
-import { useAuth } from "@/lib/auth-context";
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
-  FlatList,
+  Image,
+  Pressable,
   RefreshControl,
+  ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
+  TextInput,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+
+const C = {
+  bg: "#FFFFFF",
+  surface: "#F7F7F8",
+  border: "#E5E5E5",
+  primary: "#10A37F",
+  primaryLight: "#E8F5F0",
+  text: "#0D0D0D",
+  muted: "#6E6E80",
+  danger: "#EF4444",
+  warning: "#F59E0B",
+  success: "#10B981",
+};
+
+const STATUS_MAP: Record<string, { label: string; color: string }> = {
+  pending:   { label: "待确认", color: C.warning },
+  confirmed: { label: "已确认", color: C.success },
+  completed: { label: "已完成", color: C.muted },
+  cancelled: { label: "已取消", color: C.danger },
+};
 
 interface Appointment {
   id: number;
-  title: string;
-  description: string;
-  status: "pending" | "confirmed" | "cancelled" | "completed";
-  scheduledAt: string | null;
-  createdAt: string;
-  aiSummary: string | null;
-  callStatus: string | null;
-  callSummary: string | null;
+  title?: string;
   merchantName?: string;
-  customerName?: string;
+  merchantCategory?: string;
+  scheduledAt?: string;
+  status: string;
+  notes?: string;
+  description?: string;
+  aiSummary?: string;
 }
 
-const STATUS_MAP = {
-  pending: { label: "待确认", color: "#F59E0B", bg: "#FFF3CD" },
-  confirmed: { label: "已确认", color: "#10B981", bg: "#D1FAE5" },
-  cancelled: { label: "已取消", color: "#EF4444", bg: "#FEE2E2" },
-  completed: { label: "已完成", color: "#6B7280", bg: "#F3F4F6" },
-};
-
 export default function AppointmentsScreen() {
-  const colors = useColors();
-  const { user } = useAuth();
+  const [phone, setPhone] = useState("");
+  const [confirmedPhone, setConfirmedPhone] = useState<string | null>(null);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [callingId, setCallingId] = useState<number | null>(null);
 
-  const isCustomer = user?.identity === "customer";
+  const isValid = /^1[3-9]\d{9}$/.test(phone);
 
-  const loadData = useCallback(async () => {
+  const loadAppointments = async (ph: string, silent = false) => {
+    if (!silent) setLoading(true);
     try {
-      const res = isCustomer
-        ? await api.appointment.myList(user?.id?.toString() || "")
-        : await api.appointment.merchantList(user?.id?.toString() || "");
-      setAppointments(res?.appointments || []);
-    } catch { /* ignore */ } finally {
+      const res = await (api.appointment as any).list(ph) as Appointment[];
+      setAppointments(Array.isArray(res) ? res : []);
+    } catch {
+      setAppointments([]);
+    } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [isCustomer]);
-
-  useEffect(() => { loadData(); }, []);
-
-  const handleSimulateCall = async (appt: Appointment) => {
-    setCallingId(appt.id);
-    try {
-      const res = await api.appointment.simulateCall(
-        { appointmentId: appt.id, targetPhone: "13800000000" },
-        user?.id?.toString() || ""
-      );
-      Alert.alert(
-        "📞 AI通话完成",
-        res?.callSummary || "AI已模拟拨打电话，预约信息已传达。",
-        [{ text: "确定", onPress: loadData }]
-      );
-    } catch (e: unknown) {
-      Alert.alert("通话失败", (e as Error).message || "请稍后重试");
-    } finally {
-      setCallingId(null);
-    }
   };
 
-  const handleUpdateStatus = async (id: number, status: string) => {
-    try {
-      await api.appointment.updateStatus({ id, status }, user?.id?.toString() || "");
-      loadData();
-    } catch (e: unknown) {
-      Alert.alert("操作失败", (e as Error).message || "请稍后重试");
-    }
+  const handleConfirm = () => {
+    if (!isValid) return;
+    setConfirmedPhone(phone);
+    loadAppointments(phone);
   };
 
-  const s = StyleSheet.create({
-    header: {
-      paddingHorizontal: 20, paddingVertical: 16,
-      backgroundColor: colors.surface,
-      borderBottomWidth: 0.5, borderBottomColor: colors.border,
-    },
-    headerTitle: { fontSize: 20, fontWeight: "800", color: colors.foreground },
-    headerSub: { fontSize: 13, color: colors.muted, marginTop: 2 },
-    card: {
-      marginHorizontal: 16, marginBottom: 12, borderRadius: 16,
-      backgroundColor: colors.surface, padding: 16,
-      borderWidth: 1, borderColor: colors.border,
-      shadowColor: "#000", shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.05, shadowRadius: 6, elevation: 2,
-    },
-    cardHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 },
-    cardTitle: { fontSize: 16, fontWeight: "700", color: colors.foreground, flex: 1 },
-    statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
-    statusText: { fontSize: 12, fontWeight: "600" },
-    metaRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 },
-    metaText: { fontSize: 13, color: colors.muted },
-    aiSummary: {
-      marginTop: 8, padding: 10,
-      backgroundColor: `${colors.primary}10`,
-      borderRadius: 10, borderLeftWidth: 3, borderLeftColor: colors.primary,
-    },
-    aiSummaryText: { fontSize: 13, color: colors.foreground, lineHeight: 18 },
-    callSummary: {
-      marginTop: 8, padding: 10,
-      backgroundColor: `${colors.success}10`,
-      borderRadius: 10, borderLeftWidth: 3, borderLeftColor: colors.success,
-    },
-    callSummaryText: { fontSize: 13, color: colors.foreground, lineHeight: 18 },
-    actionRow: { flexDirection: "row", gap: 8, marginTop: 12 },
-    callBtn: {
-      flex: 1, backgroundColor: colors.primary, borderRadius: 10,
-      paddingVertical: 10, flexDirection: "row", alignItems: "center",
-      justifyContent: "center", gap: 6,
-    },
-    callBtnText: { color: "#fff", fontSize: 13, fontWeight: "600" },
-    confirmBtn: {
-      flex: 1, backgroundColor: colors.success, borderRadius: 10,
-      paddingVertical: 10, alignItems: "center",
-    },
-    cancelBtn: {
-      flex: 1, backgroundColor: colors.error, borderRadius: 10,
-      paddingVertical: 10, alignItems: "center",
-    },
-    btnText: { color: "#fff", fontSize: 13, fontWeight: "600" },
-    emptyWrap: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: 60 },
-    emptyText: { fontSize: 16, color: colors.muted, marginTop: 12 },
-    emptyHint: { fontSize: 13, color: colors.muted, marginTop: 6 },
-  });
-
-  const renderItem = ({ item }: { item: Appointment }) => {
-    const statusInfo = STATUS_MAP[item.status] || STATUS_MAP.pending;
-    return (
-      <View style={s.card}>
-        <View style={s.cardHeader}>
-          <Text style={s.cardTitle}>{item.title}</Text>
-          <View style={[s.statusBadge, { backgroundColor: statusInfo.bg }]}>
-            <Text style={[s.statusText, { color: statusInfo.color }]}>{statusInfo.label}</Text>
-          </View>
-        </View>
-
-        {item.merchantName && (
-          <View style={s.metaRow}>
-            <IconSymbol name="building.2.fill" size={14} color={colors.muted} />
-            <Text style={s.metaText}>{item.merchantName}</Text>
-          </View>
-        )}
-        {item.customerName && (
-          <View style={s.metaRow}>
-            <IconSymbol name="person.fill" size={14} color={colors.muted} />
-            <Text style={s.metaText}>{item.customerName}</Text>
-          </View>
-        )}
-        {item.scheduledAt && (
-          <View style={s.metaRow}>
-            <IconSymbol name="clock.fill" size={14} color={colors.muted} />
-            <Text style={s.metaText}>{new Date(item.scheduledAt).toLocaleString("zh-CN")}</Text>
-          </View>
-        )}
-        {item.description ? (
-          <Text style={{ fontSize: 13, color: colors.muted, marginTop: 4 }}>{item.description}</Text>
-        ) : null}
-
-        {item.aiSummary ? (
-          <View style={s.aiSummary}>
-            <Text style={{ fontSize: 11, color: colors.primary, fontWeight: "600", marginBottom: 2 }}>✨ AI摘要</Text>
-            <Text style={s.aiSummaryText}>{item.aiSummary}</Text>
-          </View>
-        ) : null}
-
-        {item.callSummary ? (
-          <View style={s.callSummary}>
-            <Text style={{ fontSize: 11, color: colors.success, fontWeight: "600", marginBottom: 2 }}>📞 通话记录</Text>
-            <Text style={s.callSummaryText}>{item.callSummary}</Text>
-          </View>
-        ) : null}
-
-        {item.status === "pending" && (
-          <View style={s.actionRow}>
-            <TouchableOpacity
-              style={s.callBtn}
-              onPress={() => handleSimulateCall(item)}
-              disabled={callingId === item.id}
-            >
-              {callingId === item.id ? (
-                <ActivityIndicator color="#fff" size="small" />
-              ) : (
-                <>
-                  <IconSymbol name="phone.fill" size={14} color="#fff" />
-                  <Text style={s.callBtnText}>AI拨打电话</Text>
-                </>
-              )}
-            </TouchableOpacity>
-            {!isCustomer && (
-              <>
-                <TouchableOpacity style={s.confirmBtn} onPress={() => handleUpdateStatus(item.id, "confirmed")}>
-                  <Text style={s.btnText}>确认</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={s.cancelBtn} onPress={() => handleUpdateStatus(item.id, "cancelled")}>
-                  <Text style={s.btnText}>拒绝</Text>
-                </TouchableOpacity>
-              </>
-            )}
-          </View>
-        )}
-      </View>
-    );
+  const onRefresh = () => {
+    if (!confirmedPhone) return;
+    setRefreshing(true);
+    loadAppointments(confirmedPhone, true);
   };
 
   return (
-    <ScreenContainer>
+    <SafeAreaView style={s.safe} edges={["top"]}>
       <View style={s.header}>
         <Text style={s.headerTitle}>我的预约</Text>
-        <Text style={s.headerSub}>
-          {isCustomer ? "查看您的所有预约记录" : "管理客户预约请求"}
-        </Text>
+        <Text style={s.headerSub}>查看和管理你的预约记录</Text>
       </View>
 
-      {loading ? (
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-          <ActivityIndicator size="large" color={colors.primary} />
+      <ScrollView
+        contentContainerStyle={s.content}
+        keyboardShouldPersistTaps="handled"
+        refreshControl={
+          confirmedPhone ? (
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.primary} />
+          ) : undefined
+        }
+      >
+        <View style={s.phoneCard}>
+          <Text style={s.label}>输入手机号查看预约</Text>
+          <View style={s.phoneRow}>
+            <Text style={s.prefix}>+86</Text>
+            <TextInput
+              style={s.phoneInput}
+              placeholder="手机号"
+              placeholderTextColor={C.muted}
+              keyboardType="phone-pad"
+              maxLength={11}
+              value={phone}
+              onChangeText={setPhone}
+            />
+          </View>
+          <Pressable
+            style={[s.queryBtn, !isValid && s.queryBtnDisabled]}
+            onPress={handleConfirm}
+            disabled={!isValid}
+          >
+            <Text style={s.queryBtnText}>查看预约记录</Text>
+          </Pressable>
         </View>
-      ) : appointments.length === 0 ? (
-        <View style={s.emptyWrap}>
-          <Text style={{ fontSize: 48 }}>📅</Text>
-          <Text style={s.emptyText}>暂无预约记录</Text>
-          <Text style={s.emptyHint}>{isCustomer ? "去搜索商家并预约吧" : "等待客户预约"}</Text>
+
+        {loading && (
+          <View style={s.center}>
+            <ActivityIndicator color={C.primary} />
+            <Text style={s.loadingText}>加载中...</Text>
+          </View>
+        )}
+
+        {!loading && confirmedPhone && appointments.length === 0 && (
+          <View style={s.emptyCard}>
+            <Image source={require("@/assets/images/icon.png")} style={s.emptyLogo} />
+            <Text style={s.emptyTitle}>暂无预约记录</Text>
+            <Text style={s.emptyHint}>去首页和道道 AI 对话，找到心仪商家后可以直接预约</Text>
+          </View>
+        )}
+
+        {!loading && appointments.map((appt) => {
+          const st = STATUS_MAP[appt.status] ?? { label: appt.status, color: C.muted };
+          const dt = appt.scheduledAt ? new Date(appt.scheduledAt) : null;
+          return (
+            <View key={appt.id} style={s.apptCard}>
+              <View style={s.apptTop}>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.merchantName}>{appt.merchantName || appt.title || "预约"}</Text>
+                  {appt.merchantCategory && (
+                    <Text style={s.category}>{appt.merchantCategory}</Text>
+                  )}
+                </View>
+                <View style={[s.statusBadge, { backgroundColor: st.color + "20" }]}>
+                  <Text style={[s.statusText, { color: st.color }]}>{st.label}</Text>
+                </View>
+              </View>
+
+              {dt && (
+                <View style={s.timeRow}>
+                  <Text style={s.timeLabel}>预约时间</Text>
+                  <Text style={s.timeValue}>
+                    {dt.toLocaleDateString("zh-CN", { month: "long", day: "numeric", weekday: "short" })}
+                    {"  "}
+                    {dt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
+                  </Text>
+                </View>
+              )}
+
+              {(appt.notes || appt.description) && (
+                <View style={s.notesRow}>
+                  <Text style={s.notesLabel}>备注</Text>
+                  <Text style={s.notesValue}>{appt.notes || appt.description}</Text>
+                </View>
+              )}
+
+              {appt.aiSummary && (
+                <View style={s.aiSummaryRow}>
+                  <Image source={require("@/assets/images/icon.png")} style={s.aiSummaryIcon} />
+                  <Text style={s.aiSummaryText}>{appt.aiSummary}</Text>
+                </View>
+              )}
+            </View>
+          );
+        })}
+
+        <View style={s.tipCard}>
+          <Text style={s.tipTitle}>关于预约</Text>
+          <Text style={s.tipText}>
+            通过道道 AI 匹配到商家后，可以直接在对话中发起预约。商家确认后，你会在这里看到预约详情。
+          </Text>
         </View>
-      ) : (
-        <FlatList
-          data={appointments}
-          renderItem={renderItem}
-          keyExtractor={(item) => String(item.id)}
-          contentContainerStyle={{ paddingVertical: 12 }}
-          showsVerticalScrollIndicator={false}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); loadData(); }} />}
-        />
-      )}
-    </ScreenContainer>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
+
+const s = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: C.bg },
+  header: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 8 },
+  headerTitle: { fontSize: 28, fontWeight: "700", color: C.text },
+  headerSub: { fontSize: 13, color: C.muted, marginTop: 2 },
+  content: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 60, gap: 14 },
+  phoneCard: {
+    borderRadius: 16, borderWidth: 1, borderColor: C.border,
+    backgroundColor: C.surface, padding: 16, gap: 12,
+  },
+  label: { fontSize: 14, fontWeight: "600", color: C.text },
+  phoneRow: {
+    flexDirection: "row", alignItems: "center",
+    borderWidth: 1, borderColor: C.border, borderRadius: 12,
+    backgroundColor: C.bg, paddingHorizontal: 14,
+  },
+  prefix: { fontSize: 15, color: C.text, fontWeight: "600", marginRight: 8 },
+  phoneInput: { flex: 1, fontSize: 15, color: C.text, paddingVertical: 12 },
+  queryBtn: {
+    backgroundColor: C.primary, borderRadius: 12,
+    paddingVertical: 13, alignItems: "center",
+  },
+  queryBtnDisabled: { backgroundColor: C.border },
+  queryBtnText: { fontSize: 15, fontWeight: "700", color: "#fff" },
+  center: { alignItems: "center", paddingTop: 40, gap: 8 },
+  loadingText: { fontSize: 14, color: C.muted },
+  emptyCard: {
+    borderRadius: 16, borderWidth: 1, borderColor: C.border,
+    backgroundColor: C.surface, padding: 32, alignItems: "center", gap: 12,
+  },
+  emptyLogo: { width: 56, height: 56, borderRadius: 14, opacity: 0.5 },
+  emptyTitle: { fontSize: 16, fontWeight: "700", color: C.text },
+  emptyHint: { fontSize: 13, color: C.muted, textAlign: "center", lineHeight: 20 },
+  apptCard: {
+    borderRadius: 16, borderWidth: 1, borderColor: C.border,
+    backgroundColor: C.bg, padding: 16, gap: 10,
+  },
+  apptTop: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
+  merchantName: { fontSize: 16, fontWeight: "700", color: C.text },
+  category: { fontSize: 12, color: C.muted, marginTop: 2 },
+  statusBadge: {
+    paddingHorizontal: 10, paddingVertical: 4,
+    borderRadius: 8, alignSelf: "flex-start",
+  },
+  statusText: { fontSize: 12, fontWeight: "600" },
+  timeRow: { flexDirection: "row", gap: 8, alignItems: "center" },
+  timeLabel: { fontSize: 12, color: C.muted, width: 56 },
+  timeValue: { fontSize: 14, color: C.text, flex: 1 },
+  notesRow: { gap: 4 },
+  notesLabel: { fontSize: 12, color: C.muted },
+  notesValue: { fontSize: 14, color: C.text },
+  aiSummaryRow: {
+    flexDirection: "row", gap: 8, alignItems: "flex-start",
+    backgroundColor: C.primaryLight, borderRadius: 10, padding: 10,
+  },
+  aiSummaryIcon: { width: 20, height: 20, borderRadius: 5 },
+  aiSummaryText: { flex: 1, fontSize: 13, color: C.primary, lineHeight: 20 },
+  tipCard: {
+    borderRadius: 16, borderWidth: 1, borderColor: C.border,
+    backgroundColor: C.surface, padding: 16, gap: 8,
+  },
+  tipTitle: { fontSize: 14, fontWeight: "700", color: C.text },
+  tipText: { fontSize: 13, color: C.muted, lineHeight: 20 },
+});

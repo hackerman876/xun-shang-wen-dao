@@ -97,3 +97,11 @@
 - [ ] 前端：道道AI对话界面每条AI消息添加🔊播放按钮
 - [ ] 前端：集成expo-av音频播放，支持流式语音播放
 - [ ] 前端：语音播放状态管理（播放中/暂停/停止）
+
+## 最终版本修复（2026-02-21）
+- [x] 修复match.tsx重定向路径错误
+- [x] 添加后端appointment.listByPhone公开接口
+- [x] 修复api.ts中tRPC请求格式（input包装为{json:input}）
+- [x] 修复api.ts响应解析（result.data.json）
+- [x] TypeScript 0错误验证通过
+- [x] 所有核心接口验证通过（health/match.chat/appointment.listByPhone/match.getProfile）

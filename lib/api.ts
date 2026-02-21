@@ -6,14 +6,15 @@
 const API_BASE = process.env.EXPO_PUBLIC_API_URL || "http://127.0.0.1:3000";
 
 async function trpcQuery(path: string, input?: unknown) {
-  const url = `${API_BASE}/api/trpc/${path}${input !== undefined ? `?input=${encodeURIComponent(JSON.stringify(input))}` : ""}`;
+  const wrappedInput = input !== undefined ? { json: input } : undefined;
+  const url = `${API_BASE}/api/trpc/${path}${wrappedInput !== undefined ? `?input=${encodeURIComponent(JSON.stringify(wrappedInput))}` : ""}`;
   const res = await fetch(url, {
     headers: { "Content-Type": "application/json" },
     credentials: "include",
   });
   const json = await res.json();
-  if (json.error) throw new Error(json.error.message || "API Error");
-  return json.result?.data;
+  if (json.error) throw new Error(json.error?.json?.message || json.error?.message || "API Error");
+  return json.result?.data?.json ?? json.result?.data;
 }
 
 async function trpcMutation(path: string, input?: unknown, token?: string) {
@@ -24,11 +25,11 @@ async function trpcMutation(path: string, input?: unknown, token?: string) {
     method: "POST",
     headers,
     credentials: "include",
-    body: JSON.stringify(input),
+    body: JSON.stringify({ json: input }),
   });
   const json = await res.json();
-  if (json.error) throw new Error(json.error.message || "API Error");
-  return json.result?.data;
+  if (json.error) throw new Error(json.error?.json?.message || json.error?.message || "API Error");
+  return json.result?.data?.json ?? json.result?.data;
 }
 
 export const api = {
@@ -52,6 +53,7 @@ export const api = {
   },
   appointment: {
     create: (data: Record<string, unknown>, token: string) => trpcMutation("appointment.create", data, token),
+    list: (phone: string) => trpcQuery("appointment.listByPhone", { phone }),
     myList: (token: string) => trpcQuery("appointment.myList"),
     merchantList: (token: string) => trpcQuery("appointment.merchantList"),
     updateStatus: (data: { id: number; status: string }, token: string) =>

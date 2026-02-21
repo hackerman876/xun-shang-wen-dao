@@ -216,6 +216,13 @@ export const appRouter = router({
 
         return { success: true, callSummary };
       }),
+    listByPhone: publicProcedure
+      .input(z.object({ phone: z.string() }))
+      .query(async ({ input }) => {
+        const user = await db.getUserByPhone(input.phone);
+        if (!user) return [];
+        return db.getAppointmentsByCustomer(user.id);
+      }),
   }),
 
   ai: router({
